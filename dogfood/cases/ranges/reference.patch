@@ -1,0 +1,36 @@
+--- a/ranges.ddr
++++ b/ranges.ddr
+@@ -1,2 +1,22 @@
+ pub struct Span { start: i64, end: i64 }
+-pub fn normalize(spans: &[]Span) -> []Span { spans.clone() }
++pub fn normalize(spans: &[]Span) -> []Span {
++    mut sorted: []Span = []
++    for s in spans {
++        if s.end <= s.start { continue }
++        sorted.push(s.clone())
++        mut j := sorted.len - 1
++        while j > 0 && sorted[j].start < sorted[j-1].start {
++            tmp := sorted[j-1].clone()
++            sorted[j-1] = sorted[j].clone()
++            sorted[j] = tmp
++            j -= 1
++        }
++    }
++    mut result: []Span = []
++    for s in &sorted {
++        last := result.len - 1
++        if last < 0 || s.start > result[last].end { result.push(s.clone()) }
++        else if s.end > result[last].end { result[last].end = s.end }
++    }
++    result
++}
+--- a/usage.ddr
++++ b/usage.ddr
+@@ -1,6 +1,6 @@
+ import .ranges
+ pub fn covered(spans: &[]ranges.Span) -> i64 {
+     mut total := i64(0)
+-    for s in spans { total += s.end - s.start }
++    for s in ranges.normalize(&spans) { total += s.end - s.start }
+     total
+ }

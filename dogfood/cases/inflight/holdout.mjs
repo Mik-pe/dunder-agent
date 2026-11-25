@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { cache } from "./cache.mjs";
+let time=0; const loads=[];
+const c=cache(key=>new Promise((ok,fail)=>loads.push({key,ok,fail})),5,()=>time);
+const old=c.get("a"); await Promise.resolve(); c.invalidate("a");
+const newer=c.get("a"); const other=c.get("b"); await Promise.resolve();
+assert.deepEqual(loads.map(x=>x.key),["a","a","b"]);
+time=12; loads[1].ok("new"); loads[2].ok("B"); await newer; await other;
+loads[0].ok("old"); assert.equal(await old,"old"); assert.equal(await c.get("a"),"new");
+time=16; assert.equal(await c.get("b"),"B");
+time=17; const stale=c.get("a"); await Promise.resolve(); c.invalidate("a"); const fresh=c.get("a"); await Promise.resolve();
+loads[4].ok("fresh"); await fresh; loads[3].fail(Error("stale")); await assert.rejects(stale);
+assert.equal(await c.get("a"),"fresh");
+c.invalidate("b"); const bad=c.get("b"); await Promise.resolve(); loads[5].fail(Error("bad")); await assert.rejects(bad);
+const retry=c.get("b"); await Promise.resolve(); loads[6].ok("retry"); assert.equal(await retry,"retry");

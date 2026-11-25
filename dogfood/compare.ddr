@@ -1,0 +1,101 @@
+capability filesystem, process, stdio
+import .competitors
+import .corpus
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.text as text
+import std.time as clock
+import sys
+
+@derive(Encode)
+struct Trial {
+    task: string, harness: string, model: string, tree: string, trial: string,
+    version: string, executable_sha256: string, fixture_sha256: string, runner_sha256: string,
+    status: string, elapsed_ms: i64, budget_ms: i64, manual_interventions: i32,
+    exit_code: i32, signal: i32,
+}
+
+fn fingerprint(file: string) -> string {
+    result := corpus.call(".", ["shasum", "-a", "256", file.clone()])
+    assert(result.succeeded())
+    text.split(result.stdout_text(), " ")[0].clone()
+}
+
+fn main() -> i32 {
+    if path.basename(sys.arg(0)) == "check" { return corpus.check_workspace() }
+    if sys.arg_count() != 6 {
+        _ := sys.eprint("compare CASE HARNESS EXECUTABLE REPETITION OUTPUT-DIRECTORY")
+        return 2
+    }
+    fixture := fs.realpath(path.join("dogfood/cases", sys.arg(1))).value
+    spec := json.from_str<corpus.Case>(sys.read(path.join(fixture, "case.json")).unwrap()).unwrap()
+    peer := sys.arg(2)
+    app := fs.realpath(sys.arg(3))
+    if !app.ok { _ := sys.eprint("Harness executable missing."); return 2 }
+    out := sys.arg(5)
+    assert(fs.mkdir_all(path.dirname(out)).ok)
+    if !sys.mkdir(out).ok { _ := sys.eprint("Results directory must be new."); return 2 }
+    assert(fs.chmod(out, 448).is_ok())
+    temp := fs.temp_dir("harness-trial-").value
+    defer { _ := fs.remove_all(temp) }
+    work := path.join(temp, "work")
+    corpus.copy_tree(path.join(fixture, "start"), work)
+    assert(fs.mkdir_all(path.join(temp, "bin")).ok)
+    assert(fs.symlink(fs.realpath(sys.arg(0)).value, path.join(temp, "bin/check")).ok)
+    assert(fs.symlink("../bin/check", path.join(work, "check")).ok)
+    assert(sys.write(path.join(temp, "visible.json"), json.to_string(&spec.visible).unwrap()).is_ok())
+    corpus.initialize(work)
+    tree := corpus.call(work, ["git", "rev-parse", "HEAD"]).stdout_text()
+    if peer == "reference" {
+        if corpus.call(work, &spec.visible).succeeded() { _ := sys.eprint("Seed unexpectedly passes."); return 1 }
+        if !corpus.check_command(work, ["git", "apply", path.join(fixture, "reference.patch")]) { return 1 }
+        if !corpus.check_command(work, ["./check"]) { return 1 }
+        verdict := corpus.grade(&spec, fixture, work, path.join(temp, "oracle"))
+        print(verdict)
+        return if verdict == "pass" { 0 } else { 1 }
+    }
+    version_call := corpus.call(work, [app.value.clone(), "--version"])
+    if !version_call.succeeded() { _ := sys.eprint("Could not identify harness version."); return 2 }
+    version := text.trim(version_call.stdout_text())
+    executable_digest := fingerprint(app.value)
+    runner_digest := fingerprint(fs.realpath(sys.arg(0)).value)
+    fixture_digest := corpus.fixture_digest(fixture)
+    mut id := ""
+    mut status := "pass"
+    mut code := 0
+    mut sig := 0
+    budget := i64(300000)
+    mut elapsed := i64(0)
+    for task in [spec.prompt.clone(), spec.followup.clone()] {
+        if task == "" { continue }
+        prompt := task + " Run ./check after the final change. Work only in this local repository."
+        mut cmd := match competitors.command(peer, app.value, work, temp, prompt, id) {
+            .Ok(c) => c, .Err(e) => { _ := sys.eprint(e); return 2 },
+        }
+        cmd.set_timeout(budget - elapsed)
+        start := clock.monotonic_ms()
+        output := cmd.exec()
+        elapsed += clock.monotonic_ms() - start
+        code = output.code
+        sig = output.signal
+        log := if id == "" { "turn-1" } else { "turn-2" }
+        assert(fs.write_private_atomic(path.join(out, log + ".stdout"), &output.stdout).is_ok())
+        assert(fs.write_private_atomic(path.join(out, log + ".stderr"), &output.stderr).is_ok())
+        if output.timed_out || elapsed >= budget { status = "timeout"; break }
+        if !output.succeeded() { status = "harness-error"; break }
+        if id == "" && spec.followup != "" {
+            digest := corpus.snapshot(work, "").unwrap()
+            if !corpus.has_passing_check(work, digest) { status = "missing-first-check"; break }
+            assert(sys.remove_file(path.join(temp, "checked")).ok)
+            id = competitors.session_id(peer, &output)
+            if id == "" { status = "resume-unavailable"; break }
+        }
+    }
+    if status == "pass" { status = corpus.grade(&spec, fixture, work, path.join(temp, "oracle")) }
+    row := Trial { task: sys.arg(1), harness: peer.clone(), model: competitors.MODEL, version: version.clone(), executable_sha256: executable_digest.clone(), fixture_sha256: fixture_digest.clone(), runner_sha256: runner_digest.clone(), tree: text.trim(tree), trial: sys.arg(4), status: status.clone(), elapsed_ms: elapsed, budget_ms: budget, manual_interventions: 0, exit_code: code, signal: sig }
+    encoded := json.to_string(&row).unwrap()
+    assert(fs.write_private_text_atomic(path.join(out, "result.json"), encoded + "\n").is_ok())
+    print(encoded)
+    if status == "pass" { 0 } else { 1 }
+}

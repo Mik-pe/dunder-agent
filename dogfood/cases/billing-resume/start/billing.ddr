@@ -1,0 +1,4 @@
+pub fn charge(units: i32) -> i64 {
+    if units <= 0 { return 0 }
+    i64(units)*8
+}

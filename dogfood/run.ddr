@@ -5,13 +5,9 @@ import std.process as process
 import std.text as text
 import sys
 
-const SOURCE: string = @embed_file("dogfood/limit/limit.ddr")
-const TESTS: string = @embed_file("dogfood/limit/tests.ddr")
-const ORACLE: string = """import .limit
-@test fn negative_interval() { assert(limit.limit(0,-8,-4) == -4) }
-@test fn endpoints() { assert(limit.limit(7,7,12) == 7 && limit.limit(12,7,12) == 12) }
-@test fn constant_interval() { assert(limit.limit(800,5,5) == 5) }
-"""
+const SOURCE: string = @embed_file("dogfood/cases/limit/start/limit.ddr")
+const TESTS: string = @embed_file("dogfood/cases/limit/start/tests.ddr")
+const ORACLE: string = @embed_file("dogfood/cases/limit/holdout.ddr")
 const TASK: string = "Fixa felet i limit.ddr. Behåll testerna och kör den angivna kontrollen."
 
 fn main() -> i32 {

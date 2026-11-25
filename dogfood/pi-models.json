@@ -1,0 +1,23 @@
+{
+  "providers": {
+    "zai": {
+      "api": "openai-completions",
+      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+      "models": [{
+        "id": "glm-5.4",
+        "name": "GLM-5.4",
+        "reasoning": true,
+        "input": ["text"],
+        "contextWindow": 1000000,
+        "maxTokens": 131072,
+        "compat": {
+          "supportsStore": false,
+          "supportsReasoningEffort": true,
+          "maxTokensField": "max_tokens",
+          "thinkingFormat": "zai",
+          "zaiToolStream": true
+        }
+      }]
+    }
+  }
+}

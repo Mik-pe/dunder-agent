@@ -1,0 +1,15 @@
+import .ranges
+import .usage
+fn s(a: i64,b: i64) -> ranges.Span { ranges.Span { start:a,end:b } }
+@test fn mixed() {
+    items: []ranges.Span = [s(8,10),s(4,7),s(3,5),s(7,8),s(-4,-2),s(4,4),s(9,2),s(4,5)]
+    out := ranges.normalize(&items)
+    assert(out.len == 2 && out[0].start == -4 && out[0].end == -2 && out[1].start == 3 && out[1].end == 10)
+    assert(items[0].start == 8 && usage.covered(&items) == 9)
+}
+@test fn large() {
+    items: []ranges.Span = [s(70000000000,70000000006),s(70000000006,70000000007)]
+    assert(usage.covered(&items) == 7)
+    empty: []ranges.Span = []
+    assert(ranges.normalize(&empty).len == 0 && usage.covered(&empty) == 0)
+}

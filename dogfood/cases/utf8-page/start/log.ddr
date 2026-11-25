@@ -1,0 +1,6 @@
+pub struct Page { body: string, next: i32 }
+pub fn page(s: string, start: i32, budget: i32) -> Result<Page,string> {
+    if start < 0 || start > s.len || budget < 0 { return .Err("range") }
+    end := if budget < s.len - start { start + budget } else { s.len }
+    .Ok(Page { body:s[start..end], next:end })
+}

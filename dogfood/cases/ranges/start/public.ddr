@@ -1,0 +1,6 @@
+import .ranges
+import .usage
+@test fn overlapping() {
+    items: []ranges.Span = [ranges.Span { start: 5, end: 9 }, ranges.Span { start: 2, end: 6 }]
+    assert(usage.covered(&items) == 7)
+}

@@ -1,0 +1,19 @@
+--- a/billing.ddr
++++ b/billing.ddr
+@@ -1,4 +1,14 @@
+ pub fn charge(units: i32) -> i64 {
+-    if units <= 0 { return 0 }
+-    i64(units)*8
++    if units <= 3 { return 0 }
++    if units <= 10 { return i64(units-3)*8 }
++    56 + i64(units-10)*5
+ }
++
++pub fn display(units: i32) -> string {
++    amount := charge(units)
++    if amount == 0 { return "included" }
++    whole := amount / 100
++    cents := amount % 100
++    if cents < 10 { return f"{whole}.0{cents} cr" }
++    f"{whole}.{cents} cr"
++}

@@ -1,0 +1,29 @@
+--- a/csv.mjs
++++ b/csv.mjs
+@@ -1,4 +1,24 @@
+ export function readTable(chunks) {
+-  return chunks.flatMap(chunk =>
+-    chunk.split(/\r?\n/).filter(Boolean).map(line => line.split(",")));
++  const source = chunks.join("");
++  if (!source.length) return [];
++  const rows = [];
++  let row = [], field = "", quoted = false, closed = false, ended = false;
++  for (let i = 0; i < source.length; i++) {
++    const ch = source[i]; ended = false;
++    if (quoted) {
++      if (ch !== '"') field += ch;
++      else if (source[i + 1] === '"') { field += '"'; i++; }
++      else { quoted = false; closed = true; }
++    } else if (ch === ",") {
++      row.push(field); field = ""; closed = false;
++    } else if (ch === "\r" || ch === "\n") {
++      if (ch === "\r" && source[i + 1] === "\n") i++;
++      row.push(field); rows.push(row); row = []; field = ""; closed = false; ended = true;
++    } else if (ch === '"' && !field && !closed) quoted = true;
++    else if (ch === '"' || closed) throw SyntaxError("invalid quoting");
++    else field += ch;
++  }
++  if (quoted) throw SyntaxError("unterminated field");
++  if (!ended) { row.push(field); rows.push(row); }
++  return rows;
+ }

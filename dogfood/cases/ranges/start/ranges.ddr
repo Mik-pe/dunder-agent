@@ -1,0 +1,2 @@
+pub struct Span { start: i64, end: i64 }
+pub fn normalize(spans: &[]Span) -> []Span { spans.clone() }

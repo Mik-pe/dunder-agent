@@ -1,0 +1,2 @@
+import .billing
+@test fn tiers() { assert(billing.charge(3) == 0 && billing.charge(10) == 56 && billing.charge(11) == 61) }

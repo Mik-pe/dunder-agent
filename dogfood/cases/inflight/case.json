@@ -1,0 +1,16 @@
+{
+  "prompt": "Fix the asynchronous cache. Coalesce overlapping loads of one key. Measure TTL from settlement, expiring at the boundary. A rejected load can be retried. invalidate(key) takes effect immediately, including during a load: its original waiters still settle, but an older success or rejection must never overwrite or evict a newer load. Other keys remain independent.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

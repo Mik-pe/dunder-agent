@@ -1,0 +1,16 @@
+{
+  "prompt": "Repair layered settings. Merge defaults, project and user recursively for plain JSON objects. Later literal values including null win, arrays replace, and an undefined override means inherit. Callers may freely mutate the output without changing any input.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

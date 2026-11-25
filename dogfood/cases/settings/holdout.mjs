@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { settings } from "./settings.mjs";
+const d = { groups: [{ title: "A" }], ui: { colors: ["red"], size: 12 }, banner: "welcome" };
+const u = { ui: { size: undefined }, banner: null };
+const p = { ui: { colors: [] } };
+const v = settings(d, p, u);
+assert.deepEqual(v, {groups:[{title:"A"}],ui:{colors:[],size:12},banner:null});
+v.groups[0].title = "B"; v.ui.colors.push("blue");
+assert.equal(d.groups[0].title, "A"); assert.deepEqual(p.ui.colors, []);
+assert.deepEqual(settings({a:[1],b:null}, {a:{x:0},b:{v:false}}, {a:undefined}), {a:{x:0},b:{v:false}});

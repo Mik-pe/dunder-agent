@@ -1,0 +1,16 @@
+{
+  "prompt": "Fix dependency scheduling. At each step choose the earliest job in the original input whose prerequisites are all complete. Duplicate entries in one after list are harmless. Detect duplicate job IDs, unknown dependencies, and cycles with error messages containing duplicate, missing, and cycle respectively. Validate all IDs and dependencies before scheduling. Preserve the caller's objects.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

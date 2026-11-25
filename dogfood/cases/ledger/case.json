@@ -1,0 +1,16 @@
+{
+  "prompt": "Repair the ledger's batch application. Use (account,id) as the idempotency key. Replaying the same amount is harmless, but a duplicate with a different amount must fail. Reject nonsafe integer amounts and intermediate balances. If any entry fails, roll back the whole batch including all newly remembered IDs. Preserve prior successful batches.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

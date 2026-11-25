@@ -1,0 +1,18 @@
+{
+  "prompt": "Fix byte-budget pagination for UTF-8 logs. Require start at a code point boundary in 0..len inclusive and a nonnegative budget; otherwise return Err(\"range\"). Return the longest prefix within budget consisting of complete code points and its next byte offset. If data remains but the next code point cannot fit, return Err(\"budget\"). At EOF return an empty page with the same offset. Very large budgets must work.",
+  "followup": "",
+  "visible": [
+    "dunder",
+    "test",
+    "public.ddr"
+  ],
+  "hidden": [
+    "dunder",
+    "test",
+    "holdout.ddr"
+  ],
+  "oracle": "holdout.ddr",
+  "protected": [
+    "public.ddr"
+  ]
+}

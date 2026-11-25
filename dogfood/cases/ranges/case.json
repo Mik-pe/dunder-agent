@@ -1,0 +1,18 @@
+{
+  "prompt": "Repair both exported functions in this Dunder scheduling library. Drop empty/reversed half-open i64 spans, sort by start, and merge overlapping or touching spans into a fresh array. covered must count the union once. Preserve the caller's array. Inputs fit in i64, including their union's length.",
+  "followup": "",
+  "visible": [
+    "dunder",
+    "test",
+    "public.ddr"
+  ],
+  "hidden": [
+    "dunder",
+    "test",
+    "holdout.ddr"
+  ],
+  "oracle": "holdout.ddr",
+  "protected": [
+    "public.ddr"
+  ]
+}

@@ -1,0 +1,120 @@
+capability filesystem, process, stdio
+import std.array as array
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import std.sha256 as sha
+import std.text as text
+import sys
+
+@derive(Decode)
+pub struct Case {
+    prompt: string, followup: string, visible: []string, hidden: []string,
+    oracle: string, protected: []string,
+}
+
+pub fn call(cwd: string, argv: &[]string) -> process.Output {
+    mut cmd := process.Command::new(argv[0].clone(), (&argv[1..argv.len]).clone())
+    cmd.set_cwd(cwd.clone())
+    cmd.set_timeout(30000)
+    cmd.exec()
+}
+
+pub fn check_command(cwd: string, argv: &[]string) -> bool {
+    output := call(cwd, &argv)
+    if !output.succeeded() {
+        _ := sys.eprint(output.stdout_text() + output.stderr_text())
+        return false
+    }
+    true
+}
+
+pub fn copy_tree(source: string, dest: string) {
+    assert(fs.mkdir_all(dest).ok)
+    for name in fs.list_dir(source).unwrap() {
+        from := path.join(source, name)
+        to := path.join(dest, name)
+        assert(!fs.is_symlink(from))
+        if sys.metadata(from).is_dir { copy_tree(from, to) } else {
+            assert(sys.write_bytes(to, &sys.read_bytes(from).unwrap()).is_ok())
+        }
+    }
+}
+
+pub fn snapshot(work: string, dest: string) -> Result<string, string> {
+    items := process.run_in("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], work)
+    if !items.succeeded() { return .Err("Could not enumerate trial files.") }
+    mut names := text.split(items.stdout_text(), "\u{0}")
+    array.sort(&mut names)
+    mut inventory := ""
+    for name in &names {
+        if name == "" || name == "check" { continue }
+        file := path.join(work, name)
+        if fs.is_symlink(file) { return .Err("Unexpected symlink in solution.") }
+        if !sys.metadata(file).ok { continue }
+        data := sys.read_u8_limit(file, 2097152)
+        if !data.ok { return .Err("Could not read solution file " + name) }
+        inventory += json.quote(name) + " " + sha.hex_bytes(&data.value) + "\n"
+        if dest != "" {
+            to := path.join(dest, name)
+            if !fs.mkdir_all(path.dirname(to)).ok || !sys.write_u8(to, &data.value).ok { return .Err("Could not copy solution.") }
+        }
+    }
+    .Ok(sha.hex_text(inventory))
+}
+
+pub fn has_passing_check(work: string, digest: string) -> bool {
+    stamp := sys.read_text_limit(path.join(path.dirname(work), "checked"), 128)
+    stamp.ok && stamp.value == digest
+}
+
+pub fn fixture_digest(dir: string) -> string {
+    mut names := fs.list_dir(dir).unwrap()
+    array.sort(&mut names)
+    mut inventory := ""
+    for name in &names {
+        item := path.join(dir, name)
+        hash := if sys.metadata(item).is_dir { fixture_digest(item) } else { sha.hex_bytes(&sys.read_bytes(item).unwrap()) }
+        inventory += json.quote(name) + " " + hash + "\n"
+    }
+    sha.hex_text(inventory)
+}
+
+pub fn check_workspace() -> i32 {
+    work := fs.cwd().value
+    meta := path.dirname(work)
+    argv := json.from_str<[]string>(sys.read(path.join(meta, "visible.json")).unwrap()).unwrap()
+    result := call(work, &argv)
+    print(result.stdout_text() + result.stderr_text())
+    if !result.succeeded() { return 1 }
+    signature := snapshot(work, "").unwrap()
+    assert(fs.write_private_text_atomic(path.join(meta, "checked"), signature).is_ok())
+    0
+}
+
+pub fn initialize(work: string) {
+    assert(check_command(work, ["git", "init", "--quiet", "-b", "main"]))
+    assert(check_command(work, ["git", "add", "--all"]))
+    mut cmd := process.Command::new("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture"])
+    cmd.set_cwd(work.clone())
+    cmd.set_env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+    cmd.set_env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+    assert(cmd.exec().succeeded())
+}
+
+pub fn grade(spec: &Case, fixture: string, work: string, output: string) -> string {
+    for name in &spec.protected {
+        current := sys.read_text_limit(path.join(work, name), 2097152)
+        original := sys.read(path.join(path.join(fixture, "start"), name)).unwrap()
+        if !current.ok || current.value != original { return "protected-file" }
+    }
+    digest := match snapshot(work, output) { .Ok(v) => v, .Err(_) => { return "invalid-tree" }, }
+    if !has_passing_check(work, digest) { return "missing-final-check" }
+    dst := path.join(output, spec.oracle)
+    if sys.metadata(dst).ok { return "oracle-file-collision" }
+    assert(sys.write(dst, sys.read(path.join(fixture, spec.oracle)).unwrap()).is_ok())
+    if !call(output, &spec.visible).succeeded() { return "public-tests" }
+    if !call(output, &spec.hidden).succeeded() { return "holdout-tests" }
+    "pass"
+}

@@ -1,0 +1,17 @@
+--- a/page.mjs
++++ b/page.mjs
+@@ -1,6 +1,11 @@
++function compare(a, b) {
++  return a.time - b.time || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
++}
+ export function page(records, { size, after = null }) {
+-  const ordered = records.sort((a, b) => a.time - b.time);
+-  const rest = ordered.filter(row => after === null || row.time > after);
++  if (!Number.isInteger(size) || size < 1) throw new RangeError("size");
++  const rest = [...records].sort(compare).filter(row =>
++    after === null || (typeof after === "number" ? row.time > after : compare(row, after) > 0));
+   const items = rest.slice(0, size);
+-  return { items, next: items.length === size ? items.at(-1).time : null };
++  const last = items.at(-1);
++  return { items, next: rest.length > size ? { time: last.time, id: last.id } : null };
+ }

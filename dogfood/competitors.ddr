@@ -1,0 +1,117 @@
+capability filesystem, process
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import std.text as text
+import std.time as clock
+import sys
+
+pub const MODEL: string = "zai-coding-plan/glm-5.4"
+
+fn opencode_config() -> json.Doc {
+    config := process.env_or("XDG_CONFIG_HOME", path.join(process.env_or("HOME", ""), ".config"))
+    json.Doc::parse_text(sys.read_text_limit(path.join(config, "opencode/opencode.json"), 1048576).value)
+}
+
+fn glm_key() -> string {
+    inherited := process.env_or("ZAI_API_KEY", "")
+    if inherited != "" { return inherited }
+    doc := opencode_config()
+    provider := doc.field(doc.field(doc.root, "provider"), "zai-coding-plan")
+    raw := doc.get_str(doc.field(provider, "options"), "apiKey").unwrap_or_default()
+    if text.starts_with(raw, "{env:") && text.ends_with(raw, "}") { return process.env_or(raw[5..raw.len - 1], "") }
+    if text.starts_with(raw, "{") { return "" }
+    raw
+}
+
+fn opencode_settings(dir: string) -> string {
+    doc := opencode_config()
+    mcp := doc.field(doc.root, "mcp")
+    servers := if doc.kind(doc.field(mcp, "servers")) == .Object { doc.field(mcp, "servers") } else { mcp }
+    mut cfg := r#"{"share":"disabled","snapshots":false,"mcp":{"servers":{"#
+    for i in 0..doc.count(servers) {
+        if i > 0 { cfg += "," }
+        cfg += json.quote(doc.key_at(servers, i).unwrap()) + r#":{"disabled":true}"#
+    }
+    cfg += "}}}"
+    file := path.join(dir, "opencode.json")
+    assert(fs.write_private_text_atomic(file, cfg).is_ok())
+    file
+}
+
+pub fn command(peer: string, app: string, work: string, dir: string, prompt: string, resume_id: string) -> Result<process.Command, string> {
+    mut cmd := process.Command::new(app.clone(), [])
+    cmd.clear_env()
+    for name in ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"] {
+        match process.env(name) { .Some(value) => cmd.set_env(name.clone(), move value), .None => {}, }
+    }
+    cmd.set_env("PWD", work.clone())
+    cmd.set_cwd(work.clone())
+    match peer {
+        "dunder" => {
+            cmd.add_args(["--model", MODEL, "--check", "./check"])
+            if resume_id != "" { cmd.add_args(["--resume", resume_id.clone()]) }
+            cmd.add_args(["run", prompt.clone()])
+        },
+        "opencode" => {
+            cmd.add_args(["run", "--standalone", "--archived", "--auto", "--agent", "build", "--model", MODEL, "--format", "json"])
+            if resume_id != "" { cmd.add_args(["--session", resume_id.clone()]) }
+            cmd.add_args([prompt.clone()])
+            cmd.set_env("OPENCODE_CONFIG", opencode_settings(dir))
+        },
+        "pi" => {
+            key := glm_key()
+            if key == "" { return .Err("No ZAI_API_KEY or OpenCode Coding Plan key available.") }
+            cmd.set_env("ZAI_API_KEY", move key)
+            home_dir := path.join(dir, "pi")
+            assert(fs.mkdir_all(home_dir).ok)
+            assert(sys.write(path.join(home_dir, "models.json"), @embed_file("dogfood/pi-models.json")).is_ok())
+            cmd.set_env("PI_CODING_AGENT_DIR", home_dir.clone())
+            cmd.add_args(["-p", "--offline", "--mode", "json", "--provider", "zai", "--model", "glm-5.4", "--session", path.join(dir, "pi-session.jsonl"), "--", prompt.clone()])
+        },
+        "goose" => {
+            key := glm_key()
+            if key == "" { return .Err("Missing Coding Plan key.") }
+            cmd.set_env("ANTHROPIC_API_KEY", move key)
+            cmd.set_env("ANTHROPIC_HOST", "https://api.z.ai/api/anthropic")
+            cmd.set_env("GOOSE_PATH_ROOT", path.join(dir, "goose"))
+            cmd.set_env("GOOSE_MODE", "auto")
+            cmd.add_args(["run", "--no-profile", "--with-builtin", "developer", "--provider", "anthropic", "--model", "glm-5.4", "--name", "trial", "--output-format", "stream-json"])
+            if resume_id != "" { cmd.add_args(["--resume"]) }
+            cmd.add_args(["--text", prompt.clone()])
+        },
+        "cline" => {
+            key := glm_key()
+            if key == "" { return .Err("Missing Coding Plan key.") }
+            data := path.join(dir, "cline")
+            settings := path.join(data, "settings")
+            assert(fs.mkdir_all(settings).ok)
+            providers := r#"{"version":1,"lastUsedProvider":"openai-compatible","modes":{},"providers":{"openai-compatible":{"settings":{"provider":"openai-compatible","baseUrl":"https://api.z.ai/api/coding/paas/v4","model":"glm-5.4","apiKey":"# + json.quote(key) + r#"},"updatedAt":"# + json.quote(clock.unix_now().str()) + r#","tokenSource":"manual"}}}"#
+            assert(fs.write_private_text_atomic(path.join(settings, "providers.json"), providers).is_ok())
+            cmd.add_args(["--data-dir", data.clone(), "--config", path.join(dir, "cline-config"), "--cwd", work.clone(), "--json"])
+            if resume_id != "" { cmd.add_args(["--id", resume_id.clone()]) }
+            cmd.add_args([prompt.clone()])
+        },
+        _ => { return .Err("Unknown harness.") },
+    }
+    .Ok(cmd)
+}
+
+pub fn session_id(peer: string, output: &process.Output) -> string {
+    if peer == "pi" { return "pi-session.jsonl" }
+    if peer == "goose" { return "trial" }
+    if peer == "dunder" {
+        for line in text.split(output.stderr_text(), "\n") {
+            if text.starts_with(line, "Session ") { return text.trim(line[8..line.len]) }
+        }
+    }
+    if peer == "opencode" || peer == "cline" {
+        for line in text.split(output.stdout_text(), "\n") {
+            doc := json.Doc::parse_text(line)
+            id := if peer == "cline" { doc.get_str(doc.field(doc.root, "event"), "conversationId").unwrap_or_default() } else { doc.get_str(doc.root, "sessionID").unwrap_or_default() }
+            if id != "" { return id }
+        }
+    }
+    ""
+}

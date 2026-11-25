@@ -1,0 +1,8 @@
+import .billing
+@test fn bounds() {
+    assert(billing.charge(-6) == 0 && billing.charge(2147483647) == 10737418241)
+    assert(billing.display(0) == "included")
+    assert(billing.display(4) == "0.08 cr")
+    assert(billing.display(19) == "1.01 cr")
+    assert(billing.display(2147483647) == "107374182.41 cr")
+}

@@ -1,0 +1,16 @@
+{
+  "prompt": "Fix the importer that receives CSV in arbitrarily split string chunks. Parse comma-separated fields with doubled quotes and quoted line breaks. CRLF, CR and LF delimit records outside quotes. Empty fields and blank rows are meaningful. Empty input has zero rows; a trailing record delimiter creates no extra row. Reject stray quotes, junk after a closing quote, and unclosed quotes with SyntaxError.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

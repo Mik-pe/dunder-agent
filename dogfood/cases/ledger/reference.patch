@@ -1,0 +1,26 @@
+--- a/ledger.mjs
++++ b/ledger.mjs
+@@ -1,12 +1,19 @@
+ export class Ledger {
+-  constructor() { this.balance = new Map(); this.seen = new Set(); }
++  constructor() { this.balance = new Map(); this.seen = new Map(); }
+   apply(batch) {
++    const seen = new Map(this.seen), balance = new Map(this.balance);
+     for (const { account, id, cents } of batch) {
+       if (!Number.isSafeInteger(cents)) throw new TypeError("cents");
+-      if (this.seen.has(id)) continue;
+-      this.balance.set(account, (this.balance.get(account) ?? 0) + cents);
+-      this.seen.add(id);
++      const key = JSON.stringify([account, id]);
++      if (seen.has(key)) {
++        if (seen.get(key) !== cents) throw new Error("conflicting duplicate");
++        continue;
++      }
++      const next = (balance.get(account) ?? 0) + cents;
++      if (!Number.isSafeInteger(next)) throw new RangeError("unsafe balance");
++      balance.set(account, next); seen.set(key, cents);
+     }
++    this.balance = balance; this.seen = seen;
+   }
+   total(account) { return this.balance.get(account) ?? 0; }
+ }

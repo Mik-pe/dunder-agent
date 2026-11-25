@@ -1,0 +1,18 @@
+{
+  "prompt": "Repair charge(units) in Dunder. The first three units are free, units 4 through 10 cost 8 cents each, later units cost 5 cents each; negative usage costs zero. Totals are i64 even at the i32 input limit. Keep this display convention in our conversation for next time: zero is the word included, positive totals use two decimal places followed by a space and cr. For this turn implement only charge.",
+  "followup": "Now expose display(units: i32) -> string in billing.ddr and apply the exact presentation convention from our earlier turn. Keep charge working.",
+  "visible": [
+    "dunder",
+    "test",
+    "public.ddr"
+  ],
+  "hidden": [
+    "dunder",
+    "test",
+    "holdout.ddr"
+  ],
+  "oracle": "holdout.ddr",
+  "protected": [
+    "public.ddr"
+  ]
+}

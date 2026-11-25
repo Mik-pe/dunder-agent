@@ -1,0 +1,16 @@
+{
+  "prompt": "Upgrade snapshot read/write together. readSnapshot(raw) must accept v1 {version:1,names:[...]} and v2 {version:2,items:[{name,pinned},...]}. Missing pinned means false. Keep order, duplicates and literal names. Reject unsupported versions. writeSnapshot must write v2. For a later export request, the agreed policy is pinned names only, in input order, newline-separated, without a trailing newline; defer implementing that export until I ask.",
+  "followup": "Add exportNames(items) to write.mjs using the export policy we agreed in the previous turn. Preserve snapshot compatibility.",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "prompt": "Repair cursor pagination. Order records by ascending numeric time and then by their case-sensitive ID. A new cursor is {time,id} and must keep its place even if the preceding record is removed. Continue accepting the older numeric cursor by skipping all rows at or before its timestamp. Leave inputs untouched. Return next=null on the final page and reject nonpositive or noninteger size.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

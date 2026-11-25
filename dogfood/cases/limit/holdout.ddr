@@ -1,0 +1,4 @@
+import .limit
+@test fn negative_interval() { assert(limit.limit(0,-8,-4) == -4) }
+@test fn endpoints() { assert(limit.limit(7,7,12) == 7 && limit.limit(12,7,12) == 12) }
+@test fn constant_interval() { assert(limit.limit(800,5,5) == 5) }

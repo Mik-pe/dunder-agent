@@ -1,0 +1,18 @@
+--- a/jobs.mjs
++++ b/jobs.mjs
+@@ -1,3 +1,14 @@
+ export function schedule(jobs) {
+-  return jobs.map(job => job.id);
++  const byId = new Map(jobs.map(job => [job.id, job]));
++  if (byId.size !== jobs.length) throw Error("duplicate");
++  for (const job of jobs) for (const dep of job.after) {
++    if (!byId.has(dep)) throw Error("missing");
++  }
++  const done = new Set();
++  while (done.size < jobs.length) {
++    const next = jobs.find(job => !done.has(job.id) && job.after.every(dep => done.has(dep)));
++    if (!next) throw Error("cycle");
++    done.add(next.id);
++  }
++  return [...done];
+ }

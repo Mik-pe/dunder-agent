@@ -43,7 +43,7 @@ Sessionerna sparas efter varje händelse under `$XDG_STATE_HOME/dunder-agent`, n
 
 Dunder Agent ska lösa fler verkliga koduppgifter än **minst tre av fem** open source-harnessar. Jämförelsen ska omfatta OpenCode, Aider, Cline, Goose och Pi, med samma GLM-modell, startrevision, uppgift och tidsbudget. Kör tre gånger per uppgift på minst tolv uppgifter som omfattar felsökning, flerfilsändringar, teståterkoppling och återupptagning. Räkna en uppgift som löst när en oberoende kontroll passerar i minst två körningar. Redovisa också mediantid och antal manuella ingrepp per harness.
 
-Det första körbara provet finns under dogfood. Jämförelsen mot de fem harnessarna återstår. [Prov och mätresultat](dogfood/README.md)
+Tolv uppgifter har verifierade startlägen och referenslösningar. De första pilotkörningarna är gjorda. Den fullständiga jämförelsen återstår. [Uppgifter, metod och pilotresultat](dogfood/README.md)
 
 ## Lokal verifiering
 

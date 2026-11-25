@@ -1,0 +1,14 @@
+import .log
+@test fn utf8() {
+    s := "aå🌲z"
+    p := log.page(s,0,6).unwrap()
+    assert(p.body == "aå" && p.next == 3)
+    q := log.page(s,3,4).unwrap()
+    assert(q.body == "🌲" && q.next == 7)
+    assert(log.page(s,2,3).unwrap_err() == "range")
+    assert(log.page(s,3,3).unwrap_err() == "budget")
+    assert(log.page(s,7,2147483647).unwrap().body == "z")
+    assert(log.page(s,8,0).unwrap().next == 8)
+    assert(log.page(s,9,5).unwrap_err() == "range")
+    assert(log.page(s,0,-1).unwrap_err() == "range")
+}

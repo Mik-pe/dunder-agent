@@ -1,0 +1,16 @@
+{
+  "prompt": "Correct invoices with discounts and credit notes. lineTotal returns the discounted net amount in cents, rounding each line once, half away from zero, using exact integer arithmetic. cents and quantity must be safe integers, quantity nonnegative, discountBps an integer in 0..10000 inclusive. Reject unsafe results. summary must group rounded lines by currency, returning [{currency,cents}] sorted by currency code and rejecting unsafe group totals. Preserve zero totals.",
+  "followup": "",
+  "visible": [
+    "node",
+    "public.mjs"
+  ],
+  "hidden": [
+    "node",
+    "holdout.mjs"
+  ],
+  "oracle": "holdout.mjs",
+  "protected": [
+    "public.mjs"
+  ]
+}

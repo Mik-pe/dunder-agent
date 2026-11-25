@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import {Ledger} from "./ledger.mjs";
+const l=new Ledger(), e=(account,id,cents)=>({account,id,cents});
+l.apply([e("a:x","b",8),e("a","x:b",4)]); assert.equal(l.total("a:x"),8);assert.equal(l.total("a"),4);
+l.apply([e("a","x:b",4)]);assert.equal(l.total("a"),4);
+assert.throws(()=>l.apply([e("a","fresh",10),e("a","x:b",7)]));assert.equal(l.total("a"),4);
+l.apply([e("a","fresh",-1)]);assert.equal(l.total("a"),3);
+assert.throws(()=>l.apply([e("z","one",1),e("z","two",0.5)]));assert.equal(l.total("z"),0);
+assert.throws(()=>l.apply([e("z","one",Number.MAX_SAFE_INTEGER),e("z","two",1)]));assert.equal(l.total("z"),0);
+l.apply([e("z","two",0)]);assert.throws(()=>l.apply([e("z","two",1)]));

@@ -1,0 +1,8 @@
+{
+  "prompt": "Fixa felet i limit.ddr. Behåll testerna.",
+  "followup": "",
+  "visible": ["dunder","test","tests.ddr"],
+  "hidden": ["dunder","test","holdout.ddr"],
+  "oracle": "holdout.ddr",
+  "protected": ["tests.ddr"]
+}

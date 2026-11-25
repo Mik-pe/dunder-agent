@@ -1,0 +1,15 @@
+--- a/log.ddr
++++ b/log.ddr
+@@ -1,6 +1,11 @@
+ pub struct Page { body: string, next: i32 }
++fn continuation(b: u8) -> bool { b >= 128 && b < 192 }
+ pub fn page(s: string, start: i32, budget: i32) -> Result<Page,string> {
+     if start < 0 || start > s.len || budget < 0 { return .Err("range") }
+-    end := if budget < s.len - start { start + budget } else { s.len }
++    if start < s.len && continuation(s[start]) { return .Err("range") }
++    if start == s.len { return .Ok(Page { body:"",next:start }) }
++    mut end := if budget < s.len - start { start + budget } else { s.len }
++    while end > start && end < s.len && continuation(s[end]) { end -= 1 }
++    if end == start { return .Err("budget") }
+     .Ok(Page { body:s[start..end], next:end })
+ }
