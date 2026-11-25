@@ -1,5 +1,7 @@
 capability filesystem, process, stdio, unsafe, network
+import std.bytes as bytes
 import std.fs as fs
+import std.io as io
 import std.process as process
 import std.parse as parse
 import tui.text as rich
@@ -19,6 +21,7 @@ unsafe fn flock(fd: i32, operation: i32) -> i32
 const HELP: string = """Dunder Agent
   dunder-agent [--workspace DIR] [--check COMMAND] [--resume ID]
   dunder-agent [options] run 'task'
+  dunder-agent [options] run - < task.txt
   dunder-agent [--workspace DIR] changes SESSION_ID
   dunder-agent mascot
   --plain          Run without the terminal animation
@@ -31,6 +34,15 @@ const HELP: string = """Dunder Agent
   --check COMMAND  Local shell command GLM may run without another prompt"""
 
 struct Options { references: []reference.Reference, root: string, model: string, timeout_s: i64, check: string, id: string, steps: i32, prompt: string, batch: bool, list: bool, plain: bool, mascot: bool, changes: bool }
+
+fn stdin_task() -> Result<string, string> {
+    if io.stdin().is_tty() { return .Err("run - reads a piped UTF-8 task from standard input.") }
+    raw := match io.read_stdin_limit(engine.MAX_TASK_BYTES) {
+        .Ok(buf) => move buf,
+        .Err(e) => { return .Err(if e == .TooLarge { engine.TASK_TOO_LARGE } else { "Could not read standard input: " + e.message() }) },
+    }
+    match bytes.decode(&raw) { .Ok(value) => .Ok(value), .Err(_) => .Err("Task is not valid UTF-8."), }
+}
 
 fn options() -> Result<Options, string> {
     mut o := Options { references: [], root: ".", model: provider.MODEL, timeout_s: provider.DEFAULT_TIMEOUT, check: "", id: "", steps: 24, prompt: "", batch: false, list: false, plain: false, mascot: false, changes: false }
@@ -74,6 +86,11 @@ fn options() -> Result<Options, string> {
     }
     if o.changes && (o.list || o.batch) { return .Err("Use changes separately from a turn or session list.") }
     if o.mascot && (o.batch || o.list || o.id != "") { return .Err("Run mascot separately from a session.") }
+    if o.list && (o.batch || o.id != "") { return .Err("--sessions cannot start or resume a turn.") }
+    if o.batch {
+        if o.prompt == "-" { o.prompt = stdin_task()? }
+        engine.validate_task(o.prompt)?
+    }
     .Ok(o)
 }
 
@@ -81,7 +98,6 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
     root := fs.realpath(o.root)
     if !root.ok || !sys.metadata(root.value).is_dir { return .Err("Workspace is not a directory.") }
     if o.list {
-        if o.batch || o.id != "" { return .Err("--sessions cannot start or resume a turn.") }
         rows := session.list(root.value)?
         for row in &rows { print(engine.safe(row)) }
         return .Ok
@@ -120,7 +136,7 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
 }
 
 fn main() -> i32 {
-    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.6.0"); return 0 }
+    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.7.0"); return 0 }
     if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
     if (sys.arg_count() == 3 || sys.arg_count() == 4) && sys.arg(1) == "--generate" {
         seconds := if sys.arg_count() == 3 { provider.DEFAULT_TIMEOUT } else {

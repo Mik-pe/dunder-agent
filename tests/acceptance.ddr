@@ -56,6 +56,7 @@ fn reply(req: &http.Request) -> string {
     }
     assert(body.get_str(ref, "id").unwrap() == "glm-5.4" && body.get_str(ref, "variant").is_none())
     if task == "leave pending" { return r#"{"tool":"edit","path":"note.txt","old":"old","new":"unverified"}"# }
+    if task == "  fortsätt ⚡\r\nrad två\n\n" || (task.len == 32768 && task == text.pad_left("å", 32767, "x")) { return r#"{"tool":"finish","answer":"Continued."}"# }
     if task == "continue now" { return r#"{"tool":"finish","answer":"Continued."}"# }
     if task == "group edits" || task == "stale group" {
         if last == "user" {
@@ -115,12 +116,45 @@ fn serve(dir: string) -> i32 {
     0
 }
 
-fn run(app: string, dir: string, args: []string) -> process.Output {
+fn command(app: string, dir: string, args: []string) -> process.Command {
     mut cmd := process.Command::new(app.clone(), args.clone())
     cmd.set_cwd(dir.clone())
     cmd.set_env("XDG_STATE_HOME", path.join(dir, "state"))
     cmd.set_timeout(8000)
-    cmd.exec()
+    cmd
+}
+
+fn run(app: string, dir: string, args: []string) -> process.Output {
+    command(app, dir, args).exec()
+}
+
+fn check_stdin(app: string, dir: string) {
+    mut cmd := command(app, dir, ["run", "-"])
+    cmd.set_stdin_text("  fortsätt ⚡\r\nrad två\n\n")
+    first := cmd.exec()
+    assert(first.succeeded() && first.stdout_text() == "Continued.\n")
+    id := text.split(text.split(first.stderr_text(), "\n")[0], " ")[1].clone()
+    mut resumed := command(app, dir, ["--resume", id.clone(), "run", "-"])
+    boundary := text.pad_left("å", 32767, "x")
+    assert(boundary.len == 32768)
+    resumed.set_stdin_text(boundary)
+    second := resumed.exec()
+    assert(second.succeeded() && second.stdout_text() == "Continued.\n")
+    session_dir := path.join(dir, "state/dunder-agent")
+    count := fs.list_dir(session_dir).unwrap().len
+    for invalid in ["", " \n\t", boundary + "!"] {
+        cmd.set_stdin_text(invalid)
+        failed := cmd.exec()
+        assert(failed.code == 2 && !text.contains(failed.stderr_text(), "Session "))
+    }
+    cmd.set_stdin([u8(255)])
+    assert(cmd.exec().code == 2)
+    mut bad := command(app, dir, ["run", "-", "--bad"])
+    bad.set_stdio(.Pipe, .Pipe, .Pipe)
+    mut child := bad.spawn().unwrap()
+    end := child.wait(2000)
+    assert(end.exited && !end.timed_out && end.code == 2)
+    assert(fs.list_dir(session_dir).unwrap().len == count)
 }
 
 fn main() -> i32 {
@@ -137,6 +171,7 @@ fn main() -> i32 {
     mut server := cmd.spawn().unwrap()
     defer { _ := server.kill(); _ := server.wait(1000) }
     assert(server.read_stdout_line(5000).unwrap().is_some())
+    check_stdin(app, dir)
     selected := run(app, dir, ["--model", "fixture/vendor/model#low", "run", "model variant"])
     assert(selected.succeeded() && selected.stdout_text() == "Variant received.\n")
     rejected := run(app, dir, ["--model", "fixture/m#", "run", "unreachable"])
@@ -217,6 +252,6 @@ fn main() -> i32 {
     expired := timed.exec()
     assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
     assert(fs.list_dir(scratch).unwrap().len == 0)
-    print("PASS mascot, CLI help, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
+    print("PASS mascot, CLI help, stdin tasks, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
     0
 }

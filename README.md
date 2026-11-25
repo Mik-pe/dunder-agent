@@ -23,10 +23,13 @@ Kör kommandona från projektets rot. Med `--workspace DIR` kan du välja en ann
 
 ```sh
 dunder-agent --workspace . --check 'dunder test' run 'Fixa det röda testet'
+dunder-agent --workspace . --check 'dunder test' run - < uppgift.txt
 dunder-agent --workspace . --sessions
 dunder-agent --workspace . changes SESSION_ID
 dunder-agent --workspace . --resume SESSION_ID --check 'dunder test'
 ```
+
+`run -` läser upp till 32 KiB UTF-8 från en fil eller pipe och bevarar radbrytningar och blanksteg. Det fungerar också med `--resume`.
 
 I en terminal visar `run` Mullers arbetsstatus på stderr. När utdata omdirigeras går bara slutsvaret till stdout. Använd `--plain` för att stänga av animationen även i en terminal.
 

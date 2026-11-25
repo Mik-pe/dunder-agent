@@ -11,6 +11,9 @@ import .session
 import .workspace
 import sys
 
+pub const MAX_TASK_BYTES: i64 = 32768
+pub const TASK_TOO_LARGE: string = "Task exceeds 32 KiB."
+
 pub enum Phase { Idle, Model, Command, Check, Approval }
 pub struct Run {
     references: []reference.Reference, history: session.Session, file: string, scratch: string, model: string, model_timeout_s: i64, check: string, root_entries: string,
@@ -71,10 +74,15 @@ fn request(run: &mut Run) -> Result<(), string> {
     .Ok
 }
 
+pub fn validate_task(message: string) -> Result<(), string> {
+    if i64(message.len) > MAX_TASK_BYTES { return .Err(TASK_TOO_LARGE) }
+    if text.trim(message) == "" { return .Err("Enter a task.") }
+    .Ok
+}
+
 pub fn submit(run: &mut Run, message: string) -> Result<(), string> {
     if run.phase != .Idle { return .Err("A turn is already running.") }
-    if text.trim(message) == "" { return .Err("Enter a task.") }
-    if message.len > 32768 { return .Err("Task exceeds 32 KiB.") }
+    validate_task(message)?
     run.failed = false
     run.steps = 0
     run.corrections = 0

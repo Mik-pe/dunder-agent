@@ -18,6 +18,12 @@ I en återupptagen uppgift lade agenten ett modellbeslut på den Git-ignorerade 
 
 Den ursprungliga implementationen klarade ett av fyra oberoende prov och agentens ändring klarade tre. En raderad fil i Git-indexet syntes fortfarande. Efter en manuell rättning passerade alla fyra, inklusive sortering, nästlade ignoreregler, spårade undantag, direktläsning och utmatningsgränsen. Detta var ett separat utvecklingsprov. Ett påbörjat Goose-försök som överlappade utvecklingsprovet arkiverades före bedömning och startades om från samma revision.
 
+## Agenten implementerar `run -`
+
+En ren klon av 0.6.0 fick uppgiften att läsa en UTF-8-uppgift från stdin. GLM-5.4 med varianten `low` sökte i Dunders standardbibliotek via `--reference`, hittade `io.read_stdin_limit` och ändrade CLI:t och acceptansprovet. Efter 119 sekunder var agentens bygge och egna kontroller gröna.
+
+En separat lokal bedömare körde tretton förberedda prov mot programmet. Ursprungsversionen klarade två. Agentens förslag klarade tolv, inklusive giltig UTF-8 vid exakt 32 KiB, bevarade radslut, återupptagning och avvisning av en terminal som indata. Med `run - --bad` och en öppen pipe väntade programmet på indata innan det upptäckte argumentfelet. Efter att argumentkontrollen flyttats före läsningen klarade 0.7.0 alla tretton. Regressionen med en öppen pipe ingår i `tests/acceptance.ddr`.
+
 ## Jämför harnessar lokalt
 
 Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Återupptagning med Cline kräver också tmux. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
