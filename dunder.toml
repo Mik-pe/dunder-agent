@@ -1,0 +1,9 @@
+name = "dunder-agent"
+version = "0.1.0"
+root = "src/main.ddr"
+test_root = "tests/suite.ddr"
+
+[dependencies]
+tui = { git = "https://github.com/Mik-pe/dunder-tui.git", rev = "e281b84f6943a96e004a2160c4ea2835c8ce08f8", capabilities = ["stdio", "unsafe"] }
+http_client = { git = "https://github.com/Mik-pe/dunder.git", tag = "v0.12.1", subdir = "packages/http_client", capabilities = ["network", "unsafe"] }
+http = { git = "https://github.com/Mik-pe/dunder.git", tag = "v0.12.1", subdir = "packages/http", capabilities = ["network", "unsafe"] }

@@ -1,0 +1,97 @@
+capability filesystem, process
+import std.array as array
+import std.text as text
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import .workspace
+import sys
+
+@derive(Encode, Decode)
+pub struct Event { kind: string, body: string }
+
+@derive(Encode, Decode)
+pub struct Session { root: string, events: []Event }
+
+pub fn directory() -> Result<string, string> {
+    base := process.env_or("XDG_STATE_HOME", path.join(process.env_or("HOME", ""), ".local/state"))
+    dir := path.join(base, "dunder-agent")
+    if !fs.mkdir_all(dir).ok { return .Err("Could not create the session directory.") }
+    workspace.io_status(fs.chmod(dir, 448))?
+    .Ok(dir)
+}
+
+pub fn file_for(dir: string, id: string) -> Result<string, string> {
+    if id.len == 0 || id.len > 80 { return .Err("Invalid session ID.") }
+    for b in id.bytes() {
+        if !(b >= b'0' && b <= b'9') && b != b'-' { return .Err("Invalid session ID.") }
+    }
+    .Ok(path.join(dir, id + ".json"))
+}
+
+pub fn save(file: string, state: &Session) -> Result<(), string> {
+    encoded := match json.to_string(&state) { .Ok(v) => move v, .Err(e) => { return .Err(e.message.clone()) }, }
+    if encoded.len > 8388608 { return .Err("Session reached its 8 MiB limit. Start a new session.") }
+    workspace.io_status(fs.write_private_text_atomic(file, encoded))
+}
+
+pub fn resume(file: string, root: string) -> Result<Session, string> {
+    data := match sys.read_limit(file, 8388608) { .Ok(v) => move v, .Err(e) => { return .Err(e.message()) }, }
+    state := match json.from_str<Session>(data) { .Ok(v) => move v, .Err(e) => { return .Err(e.message.clone()) }, }
+    if state.root != root { return .Err("This session belongs to a different workspace.") }
+    .Ok(state)
+}
+
+pub fn record(state: &mut Session, file: string, kind: string, body: string) -> Result<(), string> {
+    state.events.push(Event { kind: kind.clone(), body: body.clone() })
+    match save(file, &state) {
+        .Ok => .Ok,
+        .Err(reason) => {
+            _ := state.events.pop()
+            .Err(reason)
+        },
+    }
+}
+
+pub fn context(state: &Session) -> string {
+    mut used := 0
+    mut start := state.events.len
+    while start > 0 {
+        size := state.events[start - 1].body.len
+        if used + size > 80000 { break }
+        used += size
+        start -= 1
+    }
+    mut selected: []Event = []
+    if start > 0 {
+        selected.push(state.events[0].clone())
+        mut last_user := start - 1
+        while last_user > 0 && state.events[last_user].kind != "user" { last_user -= 1 }
+        if last_user > 0 { selected.push(state.events[last_user].clone()) }
+        selected.push(Event { kind: "notice", body: "Older events omitted. Re-read files before relying on their contents." })
+    }
+    for i in start..state.events.len { selected.push(state.events[i].clone()) }
+    json.to_string(&selected).unwrap()
+}
+
+pub fn list(root: string) -> Result<[]string, string> {
+    dir := directory()?
+    mut names := match fs.list_dir(dir) { .Ok(v) => v, .Err(e) => { return .Err(e.message()) }, }
+    array.sort(&mut names)
+    mut rows: []string = []
+    mut i := names.len
+    while i > 0 {
+        i -= 1
+        name := names[i].clone()
+        if !text.ends_with(name, ".json") { continue }
+        match resume(path.join(dir, name), root) {
+            .Ok(s) => {
+                title := if s.events.len > 0 { workspace.clip(s.events[0].body, 80) } else { "(empty)" }
+                rows.push(name[0..name.len - 5] + "  " + text.replace(title, "\n", " "))
+            },
+            .Err(_) => {},
+        }
+    }
+    .Ok(rows)
+}

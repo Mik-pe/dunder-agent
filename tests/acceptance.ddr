@@ -1,0 +1,103 @@
+capability network, filesystem, stdio, process
+import http
+import std.base64 as base64
+import std.bytes as bytes
+import std.fs as fs
+import std.json as json
+import std.net as net
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+fn reply(req: &http.Request) -> string {
+    assert(req.method == "POST" && req.target == "/api/experimental/generate/text")
+    auth := "Basic " + base64.encode(&bytes.from_text("opencode:fixture"))
+    assert(http.header(&req, "authorization") == auth)
+    body := json.Doc::parse_text(bytes.decode(&req.body).unwrap())
+    assert(body.get_str(body.field(body.root, "model"), "id").unwrap() == "glm-5.4")
+    prompt := body.get_str(body.root, "prompt").unwrap()
+    at := text.find(prompt, "\n{\"check\":").unwrap() + 1
+    envelope := json.Doc::parse_text(prompt[at..prompt.len])
+    events := envelope.field(envelope.root, "events")
+    mut task := ""
+    mut last := ""
+    mut body_text := ""
+    for i in 0..envelope.count(events) {
+        e := envelope.at(events, i)
+        last = envelope.get_str(e, "kind").unwrap()
+        body_text = envelope.get_str(e, "body").unwrap()
+        if last == "user" { task = body_text.clone() }
+    }
+    if task == "follow up" {
+        assert(envelope.count(events) >= 7)
+        return r#"{"tool":"finish","answer":"Resumed."}"#
+    }
+    if task == "blocked" { return r#"{"tool":"finish","blocked":true,"answer":"Missing input."}"# }
+    if task == "wait" { sys.sleep_ms(12000); return r#"{"tool":"finish","answer":"Done."}"# }
+    if task == "budget" { return r#"{"tool":"list","path":"."}"# }
+    if task == "shell" {
+        if last == "user" { return r#"{"tool":"shell","command":"printf approved > approved.txt"}"# }
+        return r#"{"tool":"finish","answer":"Shell turn complete."}"#
+    }
+    if last == "user" { return r#"{"tool":"read","path":"note.txt"}"# }
+    if body_text == "old" { return r#"{"tool":"edit","path":"note.txt","old":"old","new":"new"}"# }
+    r#"{"tool":"finish","answer":"Done."}"#
+}
+
+fn serve(dir: string) -> i32 {
+    listener := net.TcpListener::listen_addr(net.SocketAddr::loopback_v4(0), 8).unwrap()
+    assert(fs.mkdir_all(path.join(dir, "opencode")).ok)
+    reg := r#"{"password":"fixture","url":"http://127.0.0.1:"# + listener.local_port().str() + "\"}"
+    assert(fs.write_private_text_atomic(path.join(dir, "opencode/service.json"), reg).is_ok())
+    print("ready")
+    while true {
+        stream := listener.accept().unwrap()
+        req := http.read_request(&stream, 1048576, 3000)
+        if req.ok {
+            answer := r#"{"data":{"text":"# + json.quote(reply(&req)) + "}}"
+            _ := http.write_response(&stream, 200, "application/json", [], [], &bytes.from_text(answer), false)
+        }
+    }
+    0
+}
+
+fn run(app: string, dir: string, args: []string) -> process.Output {
+    mut cmd := process.Command::new(app.clone(), args.clone())
+    cmd.set_cwd(dir.clone())
+    cmd.set_env("XDG_STATE_HOME", path.join(dir, "state"))
+    cmd.set_timeout(8000)
+    cmd.exec()
+}
+
+fn main() -> i32 {
+    if sys.arg_count() == 3 && sys.arg(1) == "--serve" { return serve(sys.arg(2)) }
+    if sys.arg_count() != 2 { _ := sys.eprint("Pass the path to the compiled dunder-agent."); return 2 }
+    app := fs.realpath(sys.arg(1)).value
+    dir := fs.temp_dir("dunder-loop-test-").value
+    defer { _ := fs.remove_all(dir) }
+    state := path.join(dir, "state")
+    cmd := process.Command::new(sys.arg(0), ["--serve", state.clone()])
+    mut server := cmd.spawn().unwrap()
+    defer { _ := server.kill(); _ := server.wait(1000) }
+    assert(server.read_stdout_line(5000).unwrap().is_some())
+    note := path.join(dir, "note.txt")
+    assert(sys.write(note, "old").is_ok())
+    turn := run(app, dir, ["--check", "test \"$(cat note.txt)\" = new", "run", "repair"])
+    assert(turn.succeeded())
+    assert(sys.read(note).unwrap() == "new")
+    assert(text.contains(turn.stderr_text(), "check exit 0"))
+    id := text.split(text.split(turn.stderr_text(), "\n")[0], " ")[1].clone()
+    assert(text.contains(run(app, dir, ["--sessions"]).stdout_text(), id))
+    assert(!run(app, dir, ["run", "blocked"]).succeeded())
+    assert(run(app, dir, ["--resume", id.clone(), "run", "follow up"]).stdout_text() == "Resumed.\n")
+    assert(sys.write(note, "old").is_ok())
+    failed := run(app, dir, ["--check", "exit 7", "run", "repair"])
+    assert(!failed.succeeded() && text.contains(failed.stderr_text(), "check exit 7"))
+    assert(run(app, dir, ["run", "shell"]).succeeded())
+    assert(!sys.metadata(path.join(dir, "approved.txt")).ok)
+    budget := run(app, dir, ["--max-steps", "2", "run", "budget"])
+    assert(!budget.succeeded() && text.contains(budget.stderr_text(), "2-decision limit"))
+    print("PASS edit, automatic check, resume, failed check, shell permission, decision budget")
+    0
+}

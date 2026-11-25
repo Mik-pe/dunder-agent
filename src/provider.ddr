@@ -1,0 +1,99 @@
+capability filesystem, process, network, stdio
+import http_client
+import std.base64 as base64
+import std.bytes as bytes
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.parse as parse
+import std.process as process
+import std.text as text
+import .session
+import .workspace
+import sys
+
+const CONTRACT: string = @embed_file("src/contract.txt")
+pub const MODEL: string = "zai-coding-plan/glm-5.4"
+
+pub fn launch(dir: string, model: string, check: string, interactive: bool, state: &session.Session) -> Result<process.Child, string> {
+    rules_file := path.join(state.root, "AGENTS.md")
+    mut rules := ""
+    if !fs.is_symlink(rules_file) && sys.metadata(rules_file).is_file {
+        instructions := sys.read_text_limit(rules_file, 65536)
+        if !instructions.ok { return .Err("Could not read AGENTS.md (limit 64 KiB).") }
+        rules = instructions.value
+    }
+    input := r#"{"check":"# + json.quote(check) + r#","interactive":"# + interactive.str() + r#","instructions":"# + json.quote(rules) + r#","events":"# + session.context(&state) + "}"
+    parts := text.split(model, "/")
+    if parts.len != 2 || parts[0] == "" || parts[1] == "" { return .Err("Expected provider/model.") }
+    request := r#"{"model":{"providerID":"# + json.quote(parts[0]) + r#","id":"# + json.quote(parts[1]) + r#"},"prompt":"# + json.quote(CONTRACT + "\n" + input) + "}"
+    file := path.join(dir, "request.json")
+    workspace.io_status(fs.write_private_text_atomic(file, request))?
+    mut cmd := process.Command::new(sys.arg(0), ["--generate", file])
+    cmd.set_env("NO_PROXY", "*")
+    cmd.set_env("no_proxy", "*")
+    match cmd.spawn() { .Ok(c) => .Ok(move c), .Err(e) => .Err(e.message()), }
+}
+
+pub fn local_url(url: string) -> bool {
+    prefix := "http://127.0.0.1:"
+    if !text.starts_with(url, prefix) || url.len <= prefix.len { return false }
+    for i in prefix.len..url.len { if url[i] < b'0' || url[i] > b'9' { return false } }
+    port := parse.i64_range(url, prefix.len, url.len)
+    port.ok && port.value > 0 && port.value <= 65535
+}
+
+fn request(body: &[]u8, registration: string) -> Result<http_client.Response, string> {
+    data := sys.read_text_limit(registration, 8192)
+    if !data.ok { return .Err("OpenCode service registration unavailable.") }
+    service := json.Doc::parse_text(data.value)
+    url := service.get_str(service.root, "url").unwrap_or_default()
+    if !local_url(url) { return .Err("Expected an OpenCode service on IPv4 loopback.") }
+    mut names: []string = ["Content-Type"]
+    mut values: []string = ["application/json"]
+    password := service.get_str(service.root, "password").unwrap_or_default()
+    if password.len > 0 {
+        names.push("Authorization")
+        values.push("Basic " + base64.encode(&bytes.from_text("opencode:" + password)))
+    }
+    .Ok(http_client.request("POST", url + "/api/experimental/generate/text", &names, &values, &body, 140000, 1048576))
+}
+
+pub fn generate(file: string) -> Result<string, string> {
+    body := sys.read_u8_limit(file, 1048576)
+    if !body.ok { return .Err("Could not read model request.") }
+    base := process.env_or("XDG_STATE_HOME", path.join(process.env_or("HOME", ""), ".local/state"))
+    reg := path.join(base, "opencode/service.json")
+    for attempt in 0..2 {
+        if attempt == 1 {
+            mut cmd := process.Command::new("opencode", ["service", "start"])
+            cmd.set_timeout(12000)
+            if !cmd.exec().succeeded() { return .Err("Could not start the local OpenCode service.") }
+        }
+        if !sys.metadata(reg).is_file { continue }
+        response := request(&body.value, reg)?
+        if !response.ok {
+            if attempt == 0 && response.transport_code == 7 { continue }
+            return .Err(f"OpenCode connection failed (libcurl {response.transport_code}).")
+        }
+        data := bytes.decode(&response.body).unwrap_or_default()
+        if response.status < 200 || response.status >= 300 {
+            err := json.Doc::parse_text(data)
+            reason := err.get_str(err.root, "reason").unwrap_or("error")
+            msg := err.get_str(err.root, "message").unwrap_or("Check your OpenCode service version and model.")
+            return .Err(f"OpenCode HTTP {response.status} ({reason}): " + workspace.clip(msg, 500))
+        }
+        return .Ok(data)
+    }
+    .Err("OpenCode service registration unavailable after start.")
+}
+
+pub fn decision(output: string) -> Result<string, string> {
+    response := json.Doc::parse_text(output)
+    data := response.field(response.root, "data")
+    mut reply := text.trim(response.get_str(data, "text").unwrap_or_default())
+    if text.starts_with(reply, "```json") && text.ends_with(reply, "```") && reply.len >= 10 { reply = text.trim(reply[7..reply.len - 3]) }
+    doc := json.Doc::parse_text(reply)
+    if !doc.ok || doc.get_str(doc.root, "tool").is_none() { return .Err("Expected a JSON decision with a tool name.") }
+    .Ok(move reply)
+}

@@ -1,0 +1,82 @@
+capability filesystem, process, stdio
+import tui
+import tui.text as rich
+import std.array as array
+import std.cmp as cmp
+import std.json as json
+import std.text as text
+import .engine
+import .workspace
+
+pub struct Screen { run: engine.Run, input: string, scroll: i32, session_id: string }
+
+fn draw(frame: &mut tui.Frame, s: &Screen) {
+    (top, rest) := frame.area().rows(1)
+    frame.text(top, " Dunder Agent   " + s.run.model, tui.ink(.LightCyan).bold())
+    (content, footer) := rest.rows(cmp.max<i32>(0, rest.h - 4))
+    body := frame.panel(content, " " + s.session_id + " ", tui.ink(.Cyan))
+    mut entries: []string = []
+    for e in &s.run.history.events {
+        match e.kind {
+            "user" => entries.push("› " + e.body),
+            "assistant" => entries.push(e.body.clone()),
+            "action" => { a := json.Doc::parse_text(e.body); entries.push("· " + engine.label(&a)) },
+            "result" => entries.push("  " + workspace.clip(e.body, 180)),
+            "notice" => entries.push(e.body.clone()),
+            _ => {},
+        }
+    }
+    journal := engine.safe(array.join(&entries, "\n"))
+    mut para := rich.Paragraph::raw(move journal).wrap(.Preserve).prepare(body.w)
+    bottom := cmp.max<i32>(0, para.height() - body.h)
+    para.set_top(cmp.max<i32>(0, bottom - s.scroll))
+    para.render(&mut frame, body)
+    (status, entry) := footer.rows(1)
+    frame.text(status, " " + engine.safe(s.run.status), tui.ink(.LightYellow))
+    (input, help) := entry.rows(2)
+    prompt := if s.input == "" { "› " } else { "› " + s.input }
+    mut composer := rich.Paragraph::raw(move prompt).wrap(.Preserve).prepare(input.w)
+    composer.set_top(cmp.max<i32>(0, composer.height() - input.h))
+    composer.render(&mut frame, input)
+    hint := if s.run.phase == .Idle { " Enter send   ↑↓ history   Esc quit" } else { " ↑↓ history   Esc cancel" }
+    frame.text(help, hint, tui.ink(.DarkGray))
+}
+
+fn update(s: &mut Screen, key: tui.Key) -> bool {
+    match key {
+        .Up => { s.scroll += 3 },
+        .Down => { s.scroll = cmp.max<i32>(0, s.scroll - 3) },
+        .End => { s.scroll = 0 },
+        .Escape => {
+            if s.run.phase == .Idle { return false }
+            match engine.cancel(&mut s.run) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
+        },
+        .Enter if s.run.phase == .Idle && text.trim(s.input) != "" => {
+            message := s.input.clone()
+            s.input = ""
+            s.scroll = 0
+            match engine.submit(&mut s.run, message) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
+        },
+        .Char(c) if s.run.phase == .Approval && (c == `y` || c == `n`) => {
+            match engine.approve(&mut s.run, c == `y`) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
+        },
+        .Char(c) if s.run.phase == .Idle && s.input.len < 32768 => { s.input += c.str() },
+        .Backspace if s.run.phase == .Idle && s.input.len > 0 => {
+            mut end := s.input.len - 1
+            while end > 0 && s.input[end] >= 128 && s.input[end] < 192 { end -= 1 }
+            s.input = s.input[0..end]
+        },
+        _ => {},
+    }
+    true
+}
+
+fn tick(s: &mut Screen, _elapsed: i64) -> bool {
+    match engine.poll(&mut s.run) { .Ok(changed) => changed, .Err(e) => { engine.stop(&mut s.run, e); true }, }
+}
+
+pub fn show(s: &mut Screen) -> Result<(), string> {
+    outcome := tui.animate(&mut s, 12, draw, update, tick)
+    engine.cancel(&mut s.run)?
+    outcome
+}

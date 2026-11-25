@@ -1,0 +1,127 @@
+capability filesystem, process
+import std.array as array
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+pub fn clip(s: string, limit: i32) -> string {
+    if s.len <= limit { return s.clone() }
+    mut end := limit
+    while end > 0 && s[end] >= 128 && s[end] < 192 { end -= 1 }
+    s[0..end] + "\n[truncated]"
+}
+
+pub fn io_status(r: Result<(), sys.IoError>) -> Result<(), string> {
+    match r { .Ok => .Ok, .Err(e) => .Err(e.message()), }
+}
+
+fn location(root: string, relative: string) -> Result<string, string> {
+    if relative.len == 0 || relative.len > 2048 || text.contains(relative, "\\") { return .Err("Expected a relative file path.") }
+    mut full := root.clone()
+    for part in text.split(relative, "/") {
+        if part == "" || part == "." || part == ".." || text.lower(part) == ".git" { return .Err("Path outside the work tree.") }
+        for b in part.bytes() { if b < 32 || b == 127 { return .Err("Control character in path.") } }
+        full = path.join(full, part)
+        if fs.is_symlink(full) { return .Err("Symlinks are not supported.") }
+    }
+    .Ok(full)
+}
+
+fn read_file(file: string) -> Result<string, string> {
+    if !sys.metadata(file).is_file { return .Err("Expected an existing regular file.") }
+    match sys.read_limit(file, 524288) { .Ok(v) => .Ok(v), .Err(e) => .Err(e.message()), }
+}
+
+fn listing(dir: string) -> Result<string, string> {
+    mut names := match fs.list_dir(dir) { .Ok(v) => v, .Err(e) => { return .Err(e.message()) }, }
+    array.sort(&mut names)
+    mut lines: []string = []
+    for name in &names {
+        if text.lower(name) == ".git" { continue }
+        full := path.join(dir, name)
+        if fs.is_symlink(full) { continue }
+        if lines.len == 500 { lines.push("[truncated]"); break }
+        lines.push(if sys.metadata(full).is_dir { name + "/" } else { name.clone() })
+    }
+    .Ok(clip(array.join(&lines, "\n"), 16000))
+}
+
+fn search(root: string, query: string) -> Result<string, string> {
+    mut cmd := process.Command::new("rg", ["--no-config", "--color=never", "--no-heading", "--line-number", "--fixed-strings", "--max-columns", "300", "--max-filesize", "512K", "--", query.clone(), "."])
+    cmd.set_cwd(root.clone())
+    cmd.set_timeout(60000)
+    cmd.max_output_bytes = 262144
+    out := cmd.exec()
+    if out.timed_out { return .Err("Command timed out after 60 seconds.") }
+    if !out.ok { return .Err(f"Could not run command (OS error {out.error}).") }
+    report := clip(out.stdout_text() + out.stderr_text(), 16000)
+    if out.signal == 0 && out.code == 1 { return .Ok("No matches.") }
+    if out.signal != 0 || out.code != 0 { return .Err(f"exit {out.code}, signal {out.signal}\n{report}") }
+    .Ok(report)
+}
+
+fn change(file: string, args: &json.Doc, create: bool) -> Result<string, string> {
+    mut content := ""
+    mut mode := u32(420)
+    if create {
+        content = args.get_str(args.root, "content").ok_or("Missing content.")?
+        if sys.metadata(file).ok { return .Err("File already exists.") }
+    } else {
+        before := args.get_str(args.root, "old").ok_or("Missing old text.")?
+        after := args.get_str(args.root, "new").ok_or("Missing new text.")?
+        original := read_file(file)?
+        if before.len == 0 { return .Err("Old text must be nonempty.") }
+        at := text.find(original, before).ok_or("Old text no longer matches. Read the file again.")?
+        mut next := at + 1
+        while next < original.len && original[next] >= 128 && original[next] < 192 { next += 1 }
+        if text.contains(original[next..original.len], before) { return .Err("Old text occurs more than once. Include context.") }
+        content = original[0..at] + after + original[at + before.len..original.len]
+        mode = sys.metadata(file).mode.bit_and(511)
+    }
+    if content.len > 524288 { return .Err("File exceeds 512 KiB.") }
+    parent := path.dirname(file)
+    if create && !fs.mkdir_all(parent).ok { return .Err("Could not create parent directory.") }
+    mut tmp := match fs.temp_file(parent, ".dunder-edit-") { .Ok(f) => move f, .Err(e) => { return .Err(e.message()) }, }
+    io_status(tmp.write_text(content))?
+    io_status(tmp.set_permissions(mode))?
+    if create {
+        io_status(tmp.sync())?
+        if !fs.hard_link(tmp.path(), file).ok { return .Err("Could not create file exclusively.") }
+    } else {
+        io_status(tmp.persist(file))?
+    }
+    .Ok("Saved.")
+}
+
+pub fn execute(root: string, args: &json.Doc) -> Result<string, string> {
+    tool := args.get_str(args.root, "tool").unwrap_or_default()
+    relative := args.get_str(args.root, "path").unwrap_or_default()
+    match tool {
+        "list" => {
+            if relative == "" || relative == "." { return listing(root) }
+            listing(location(root, relative)?)
+        },
+        "read" => {
+            file := read_file(location(root, relative)?)?
+            start := args.get_i64(args.root, "offset").unwrap_or(0)
+            if start < 0 || start > i64(file.len) || (start < i64(file.len) && file[i32(start)] >= 128 && file[i32(start)] < 192) {
+                return .Err("Invalid UTF-8 byte offset.")
+            }
+            mut end := i32(start) + 16000
+            if end >= file.len { return .Ok(file[i32(start)..file.len]) }
+            while file[end] >= 128 && file[end] < 192 { end -= 1 }
+            .Ok(file[i32(start)..end] + f"\n[continue at byte {end}]")
+        },
+        "search" => {
+            query := args.get_str(args.root, "query").ok_or("Missing search text.")?
+            if query.len == 0 { return .Err("Empty search.") }
+            search(root, query)
+        },
+        "edit" => change(location(root, relative)?, &args, false),
+        "create" => change(location(root, relative)?, &args, true),
+        _ => .Err("Unknown tool."),
+    }
+}

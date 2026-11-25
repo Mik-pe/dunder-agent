@@ -1,0 +1,55 @@
+capability filesystem, process, stdio
+import std.fs as fs
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+const SOURCE: string = @embed_file("dogfood/limit/limit.ddr")
+const TESTS: string = @embed_file("dogfood/limit/tests.ddr")
+const ORACLE: string = """import .limit
+@test fn negative_interval() { assert(limit.limit(0,-8,-4) == -4) }
+@test fn endpoints() { assert(limit.limit(7,7,12) == 7 && limit.limit(12,7,12) == 12) }
+@test fn constant_interval() { assert(limit.limit(800,5,5) == 5) }
+"""
+const TASK: string = "Fixa felet i limit.ddr. Behåll testerna och kör den angivna kontrollen."
+
+fn main() -> i32 {
+    if sys.arg_count() != 2 { _ := sys.eprint("Pass the path to the dunder-agent binary."); return 2 }
+    agent := fs.realpath(sys.arg(1))
+    if !agent.ok { _ := sys.eprint("Agent binary not found."); return 2 }
+    temp := fs.temp_dir("dunder-dogfood-")
+    if !temp.ok { return 1 }
+    defer { _ := fs.remove_all(temp.value) }
+    work := path.join(temp.value, "work")
+    oracle := path.join(temp.value, "oracle")
+    assert(fs.mkdir_all(work).ok && fs.mkdir_all(oracle).ok)
+    assert(sys.write(path.join(work, "limit.ddr"), SOURCE).is_ok())
+    assert(sys.write(path.join(work, "tests.ddr"), TESTS).is_ok())
+    baseline := process.run_in("dunder", ["test", "tests.ddr"], work)
+    if baseline.succeeded() || !text.contains(baseline.stdout_text(), "2 passed, 1 failed") {
+        _ := sys.eprint("Invalid baseline: expected one failing test.")
+        return 1
+    }
+    mut cmd := process.Command::new(agent.value.clone(), ["--workspace", work.clone(), "--check", "dunder test tests.ddr", "run", TASK])
+    cmd.set_timeout(300000)
+    start := sys.now_ms()
+    output := cmd.exec()
+    elapsed := sys.now_ms() - start
+    _ := sys.eprint(output.stderr_text())
+    print(output.stdout_text())
+    if !output.succeeded() || !text.contains(output.stderr_text(), "check exit 0, signal 0") { return 1 }
+    if sys.read(path.join(work, "tests.ddr")).unwrap() != TESTS { return 1 }
+    fixed := sys.read(path.join(work, "limit.ddr")).unwrap()
+    if fixed == SOURCE { return 1 }
+    assert(sys.write(path.join(oracle, "limit.ddr"), fixed).is_ok())
+    assert(sys.write(path.join(oracle, "tests.ddr"), TESTS).is_ok())
+    assert(sys.write(path.join(oracle, "oracle.ddr"), ORACLE).is_ok())
+    for suite in ["tests.ddr", "oracle.ddr"] {
+        check := process.run_in("dunder", ["test", suite], oracle)
+        print(check.stdout_text())
+        if !check.succeeded() { _ := sys.eprint(check.stderr_text()); return 1 }
+    }
+    print(f"PASS limit · {elapsed} ms")
+    0
+}

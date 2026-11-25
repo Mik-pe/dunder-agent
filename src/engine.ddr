@@ -1,0 +1,204 @@
+capability filesystem, process, stdio
+import std.bytes as bytes
+import std.json as json
+import std.process as process
+import std.text as text
+import std.time as clock
+import .provider
+import .session
+import .workspace
+import sys
+
+pub enum Phase { Idle, Model, Command, Check, Approval }
+pub struct Run {
+    history: session.Session, file: string, scratch: string, model: string, check: string,
+    interactive: bool, phase: Phase, children: process.ChildSet, slot: i32,
+    stdout: []u8, stderr: []u8, since: i64, steps: i32, max_steps: i32,
+    needs_check: bool, bad_check: bool, corrections: i32, pending: string, status: string, failed: bool,
+}
+
+pub fn safe(s: string) -> string {
+    mut out: []u8 = []
+    for c in s.runes() {
+        n := i32(c)
+        if n == 10 || n == 9 || (n >= 32 && (n < 127 || n > 159)) {
+            bytes.append_utf8(&mut out, c.str())
+        }
+    }
+    bytes.decode(&out).unwrap_or_default()
+}
+
+pub fn label(action: &json.Doc) -> string {
+    name := action.get_str(action.root, "tool").unwrap_or("?")
+    detail := action.get_str(action.root, "path").unwrap_or(action.get_str(action.root, "query").unwrap_or(action.get_str(action.root, "command").unwrap_or_default()))
+    if detail == "" { return name }
+    name + " " + detail
+}
+
+pub fn event(run: &mut Run, kind: string, body: string) -> Result<(), string> {
+    session.record(&mut run.history, run.file, kind, body)?
+    if !run.interactive {
+        if kind == "assistant" { print(safe(body)) }
+        if kind == "action" {
+            doc := json.Doc::parse_text(body)
+            _ := sys.eprint("· " + safe(label(&doc)))
+        }
+    }
+    .Ok
+}
+
+fn start_child(run: &mut Run, move child: process.Child, phase: Phase, status: string) {
+    mut handle := move child
+    run.slot = run.children.insert(&mut handle)
+    run.stdout.clear()
+    run.stderr.clear()
+    run.phase = phase
+    run.since = clock.monotonic_ms()
+    run.status = status.clone()
+}
+
+fn request(run: &mut Run) -> Result<(), string> {
+    if run.steps >= run.max_steps { return .Err(f"Turn stopped at the {run.max_steps}-decision limit.") }
+    child := provider.launch(run.scratch, run.model, run.check, run.interactive, &run.history)?
+    run.steps += 1
+    start_child(&mut run, move child, .Model, f"Thinking · {run.steps}/{run.max_steps}")
+    .Ok
+}
+
+pub fn submit(run: &mut Run, message: string) -> Result<(), string> {
+    if run.phase != .Idle { return .Err("A turn is already running.") }
+    if text.trim(message) == "" { return .Err("Enter a task.") }
+    if message.len > 32768 { return .Err("Task exceeds 32 KiB.") }
+    run.failed = false
+    run.steps = 0
+    run.corrections = 0
+    run.needs_check = false
+    run.bad_check = false
+    event(&mut run, "user", message)?
+    request(&mut run)
+}
+
+fn result(run: &mut Run, move outcome: Result<string, string>) -> Result<(), string> {
+    body := match outcome { .Ok(value) => value, .Err(msg) => "Error: " + msg, }
+    event(&mut run, "result", body)?
+    request(&mut run)
+}
+
+fn shell(run: &mut Run, command: string, phase: Phase) -> Result<(), string> {
+    mut cmd := process.Command::new("/bin/sh", ["-c", command.clone()])
+    cmd.set_cwd(run.history.root.clone())
+    match cmd.spawn() {
+        .Ok(child) => { start_child(&mut run, move child, phase, "Running local command"); .Ok },
+        .Err(e) => {
+            if phase == .Check { run.bad_check = true; run.needs_check = false }
+            result(&mut run, .Err(e.message()))
+        },
+    }
+}
+
+pub fn approve(run: &mut Run, allow: bool) -> Result<(), string> {
+    if run.phase != .Approval { return .Err("No command is waiting for approval.") }
+    if !allow { return result(&mut run, .Err("Command declined by user.")) }
+    command := run.pending.clone()
+    shell(&mut run, command, .Command)
+}
+
+fn act(run: &mut Run, raw: string) -> Result<(), string> {
+    action := json.Doc::parse_text(raw)
+    tool := action.get_str(action.root, "tool").unwrap_or_default()
+    if tool == "finish" {
+        answer := action.get_str(action.root, "answer").unwrap_or_default()
+        if text.trim(answer) == "" { return result(&mut run, .Err("A finish action needs a nonempty answer.")) }
+        if run.needs_check && run.check != "" {
+            event(&mut run, "action", r#"{"tool":"check"}"#)?
+            line := run.check.clone()
+            return shell(&mut run, line, .Check)
+        }
+        event(&mut run, "assistant", answer)?
+        run.phase = .Idle
+        blocked := action.get_bool(action.root, "blocked").unwrap_or(false)
+        run.failed = run.bad_check || blocked
+        run.status = if run.bad_check { "Local check failed" } else if blocked { "Task blocked" } else { "Ready" }
+        return .Ok
+    }
+    event(&mut run, "action", raw)?
+    if tool == "shell" {
+        line := action.get_str(action.root, "command").unwrap_or_default()
+        if !run.interactive { return result(&mut run, .Err("Shell requires the interactive TUI.")) }
+        if line == "" || line.len > 4096 || safe(line) != line { return result(&mut run, .Err("Invalid shell command.")) }
+        run.phase = .Approval
+        run.pending = line
+        run.status = "Run this command?   y allow   n decline"
+        return .Ok
+    }
+    if tool == "check" {
+        if run.check == "" { return result(&mut run, .Err("No local check configured.")) }
+        line := run.check.clone()
+        return shell(&mut run, line, .Check)
+    }
+    answer := workspace.execute(run.history.root, &action)
+    if answer.is_ok() && (tool == "edit" || tool == "create") { run.needs_check = true }
+    result(&mut run, move answer)
+}
+
+pub fn cancel(run: &mut Run) -> Result<(), string> {
+    if run.phase == .Idle { return .Ok }
+    run.children.kill_all()
+    run.phase = .Idle
+    run.failed = true
+    run.status = "Cancelled"
+    event(&mut run, "notice", "Turn cancelled. Inspect files before continuing interrupted work.")
+}
+
+pub fn stop(run: &mut Run, reason: string) {
+    run.children.kill_all()
+    run.phase = .Idle
+    run.failed = true
+    run.status = reason.clone()
+    match event(&mut run, "notice", reason) {
+        .Ok => {},
+        .Err(e) => { run.status += " / " + e; _ := sys.eprint(safe(run.status)) },
+    }
+}
+
+pub fn poll(run: &mut Run) -> Result<bool, string> {
+    if run.phase != .Model && run.phase != .Command && run.phase != .Check { return .Ok(false) }
+    waited := run.children.try_wait(run.slot, &mut run.stdout, &mut run.stderr)
+    limit := if run.phase == .Model { i64(150000) } else { i64(60000) }
+    if run.stdout.len + run.stderr.len > 1048576 || clock.monotonic_ms() - run.since >= limit {
+        run.children.kill_all()
+        if run.phase == .Check { run.needs_check = false; run.bad_check = true }
+        if run.phase != .Model { result(&mut run, .Err("Command exceeded its time or output limit."))?; return .Ok(true) }
+        return .Err("OpenCode exceeded its time or output limit.")
+    }
+    if !waited.ok { return .Err("Could not wait for child process.") }
+    if !waited.exited { return .Ok(false) }
+    stdout := bytes.decode(&run.stdout).unwrap_or_default()
+    stderr := bytes.decode(&run.stderr).unwrap_or_default()
+    if run.phase != .Model {
+        if run.phase == .Check {
+            run.needs_check = false
+            run.bad_check = waited.code != 0 || waited.signal != 0
+            if !run.interactive { _ := sys.eprint(f"  check exit {waited.code}, signal {waited.signal}") }
+        } else { run.needs_check = true }
+        report := workspace.clip(f"exit {waited.code}, signal {waited.signal}\n" + stdout + stderr, 16000)
+        result(&mut run, .Ok(report))?
+    } else {
+        if waited.code != 0 || waited.signal != 0 {
+            detail := text.trim(stderr)
+            if detail == "" { return .Err(f"Model worker exited with code {waited.code}, signal {waited.signal}.") }
+            return .Err(workspace.clip(detail, 700))
+        }
+        match provider.decision(stdout) {
+            .Ok(raw) => { run.corrections = 0; act(&mut run, raw)? },
+            .Err(e) => {
+                if e == "Expected a JSON decision with a tool name." && run.corrections == 0 {
+                    run.corrections += 1
+                    event(&mut run, "notice", "The last reply was malformed. Return exactly one JSON action.")?
+                    request(&mut run)?
+                } else { return .Err(e) }
+            },
+        }
+    }
+    .Ok(true)
+}

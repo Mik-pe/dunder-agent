@@ -1,0 +1,13 @@
+version = 1
+
+[[git]]
+url = "https://github.com/Mik-pe/dunder-tui.git"
+kind = "rev"
+reference = "e281b84f6943a96e004a2160c4ea2835c8ce08f8"
+commit = "e281b84f6943a96e004a2160c4ea2835c8ce08f8"
+
+[[git]]
+url = "https://github.com/Mik-pe/dunder.git"
+kind = "tag"
+reference = "v0.12.1"
+commit = "57e9c4dd9602ec968b3f3cda18fe9f907bbed318"

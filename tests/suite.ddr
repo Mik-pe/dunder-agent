@@ -1,0 +1,96 @@
+capability filesystem, process
+import ..src.workspace
+import ..src.session
+import ..src.provider
+import std.json as json
+import std.fs as fs
+import std.path as path
+import std.text as text
+import sys
+
+fn tool(root: string, args: string) -> Result<string, string> {
+    parsed := json.Doc::parse_text(args)
+    workspace.execute(root, &parsed)
+}
+
+@test fn truncate_unicode() {
+    assert(workspace.clip("åäö", 3) == "å\n[truncated]")
+}
+
+@test fn create_and_edit_preserve_neighbours_and_mode() {
+    dir := fs.temp_dir("dunder-file-test-").value
+    defer { _ := fs.remove_all(dir) }
+    action := r#"{"tool":"create","path":"src/demo","content":"åäö\n"}"#
+    assert(tool(dir, action).is_ok())
+    assert(tool(dir, action).is_err())
+    file := path.join(dir, "src/demo")
+    assert(fs.chmod(file, 493).is_ok())
+    assert(tool(dir, r#"{"tool":"edit","path":"src/demo","old":"ä","new":" A "}"#).is_ok())
+    assert(sys.read(file).unwrap() == "å A ö\n")
+    assert(sys.metadata(file).mode.bit_and(511) == 493)
+}
+
+@test fn ambiguous_stale_and_missing_edits_preserve_file() {
+    dir := fs.temp_dir("dunder-edit-test-").value
+    defer { _ := fs.remove_all(dir) }
+    file := path.join(dir, "note")
+    assert(sys.write(file, "ååå").is_ok())
+    assert(tool(dir, r#"{"tool":"edit","path":"note","old":"åå","new":"x"}"#).is_err())
+    assert(tool(dir, r#"{"tool":"edit","path":"note","old":"stale","new":"x"}"#).is_err())
+    assert(tool(dir, r#"{"tool":"edit","path":"note","old":"ååå"}"#).is_err())
+    assert(sys.read(file).unwrap() == "ååå")
+}
+
+@test fn file_tools_reject_escapes_and_symlinks() {
+    dir := fs.temp_dir("dunder-path-test-").value
+    defer { _ := fs.remove_all(dir) }
+    assert(fs.symlink("/tmp", path.join(dir, "link")).ok)
+    for name in ["../notes", "/tmp/notes", ".git/config", "link/notes", "a/../b", "a\\b", "bad\u{0}path"] {
+        assert(tool(dir, r#"{"tool":"create","content":"","path":"# + json.quote(name) + "}").is_err())
+    }
+    assert(tool(dir, r#"{"tool":"list","path":"link"}"#).is_err())
+    assert(tool(dir, r#"{"tool":"read","path":"link/notes"}"#).is_err())
+}
+
+@test fn read_reports_utf8_continuation_offset() {
+    dir := fs.temp_dir("dunder-read-test-").value
+    defer { _ := fs.remove_all(dir) }
+    contents := text.pad_left("å", 16000, "x") + "!"
+    assert(sys.write(path.join(dir, "note"), contents).is_ok())
+    first := tool(dir, r#"{"tool":"read","path":"note"}"#).unwrap()
+    assert(text.ends_with(first, "[continue at byte 15999]"))
+    assert(tool(dir, r#"{"tool":"read","path":"note","offset":15999}"#).unwrap() == "å!")
+    assert(tool(dir, r#"{"tool":"read","path":"note","offset":16000}"#).is_err())
+}
+
+@test fn search_literal_and_directory_listing() {
+    dir := fs.temp_dir("dunder-search-test-").value
+    defer { _ := fs.remove_all(dir) }
+    assert(sys.write(path.join(dir, "notes"), "first\na.b\n").is_ok())
+    assert(tool(dir, r#"{"tool":"list"}"#).unwrap() == "notes")
+    assert(text.contains(tool(dir, r#"{"tool":"search","query":"a.b"}"#).unwrap(), "notes:2:a.b"))
+    assert(tool(dir, r#"{"tool":"search","query":"a?b"}"#).unwrap() == "No matches.")
+}
+
+@test fn provider_requires_complete_text_decision() {
+    reply := r#"{"tool":"finish","answer":"å"}"#
+    assert(provider.decision(r#"{"data":{"text":"# + json.quote(reply) + "}}").unwrap() == reply)
+    assert(provider.decision("{}").is_err())
+    assert(provider.decision(r#"{"data":{"text":"partial"}}"#).is_err())
+    assert(provider.local_url("http://127.0.0.1:49374"))
+    assert(!provider.local_url("http://127.0.0.1:80@elsewhere"))
+    assert(!provider.local_url("http://example.org:80"))
+}
+
+@test fn private_session_roundtrip_and_workspace_binding() {
+    dir := fs.temp_dir("dunder-state-test-").value
+    defer { _ := fs.remove_all(dir) }
+    file := session.file_for(dir, "123-45").unwrap()
+    assert(session.file_for(dir, "../x").is_err())
+    mut state := session.Session { root: dir.clone(), events: [] }
+    assert(session.record(&mut state, file, "user", "hello").is_ok())
+    loaded := session.resume(file, dir).unwrap()
+    assert(loaded.events[0].body == "hello")
+    assert(sys.metadata(file).mode.bit_and(511) == 384)
+    assert(session.resume(file, "/another-repo").is_err())
+}

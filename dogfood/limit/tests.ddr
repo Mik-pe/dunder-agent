@@ -1,0 +1,4 @@
+import .limit
+@test fn inside() { assert(limit.limit(4, 2, 6) == 4) }
+@test fn above() { assert(limit.limit(9, 2, 6) == 6) }
+@test fn below() { assert(limit.limit(-2, 2, 6) == 2) }

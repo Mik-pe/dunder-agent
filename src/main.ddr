@@ -1,0 +1,114 @@
+capability filesystem, process, stdio, unsafe, network
+import std.fs as fs
+import std.process as process
+import std.signal as signal
+import std.parse as parse
+import .engine
+import .provider
+import .session
+import .ui
+import sys
+
+@extern("c", "flock")
+unsafe fn flock(fd: i32, operation: i32) -> i32
+
+const HELP: string = """Dunder Agent
+  dunder-agent [--workspace DIR] [--check COMMAND] [--resume ID]
+  dunder-agent [options] run 'task'
+  --max-steps N    Decisions per user turn (default 24)
+  --model ID       OpenCode provider/model (default zai-coding-plan/glm-5.4)
+  --sessions       List local conversations for this workspace
+  --resume ID      Reopen a saved conversation in the same workspace
+  --check COMMAND  Local shell command GLM may run without another prompt"""
+
+struct Options { root: string, model: string, check: string, id: string, steps: i32, prompt: string, batch: bool, list: bool }
+
+fn options() -> Result<Options, string> {
+    mut o := Options { root: ".", model: provider.MODEL, check: "", id: "", steps: 24, prompt: "", batch: false, list: false }
+    mut i := 1
+    while i < sys.arg_count() {
+        name := sys.arg(i)
+        i += 1
+        if name == "--sessions" { o.list = true; continue }
+        if i >= sys.arg_count() { return .Err("Missing value for " + name) }
+        arg := sys.arg(i)
+        i += 1
+        match name {
+            "--workspace" => { o.root = arg },
+            "--model" => { o.model = arg },
+            "--check" => { o.check = arg },
+            "--resume" => { o.id = arg },
+            "--max-steps" => {
+                parsed := parse.i64_range(arg, 0, arg.len)
+                if !parsed.ok || parsed.value < 1 || parsed.value > 128 { return .Err("Expected 1..128 decisions.") }
+                o.steps = i32(parsed.value)
+            },
+            "run" => {
+                if i != sys.arg_count() { return .Err("Quote the task after run.") }
+                o.batch = true
+                o.prompt = arg
+            },
+            _ => { return .Err("Unknown option " + name) },
+        }
+    }
+    .Ok(o)
+}
+
+fn drive(o: &Options, scratch: string) -> Result<(), string> {
+    root := fs.realpath(o.root)
+    if !root.ok || !sys.metadata(root.value).is_dir { return .Err("Workspace is not a directory.") }
+    if o.list {
+        if o.batch || o.id != "" { return .Err("--sessions cannot start or resume a turn.") }
+        rows := session.list(root.value)?
+        for row in &rows { print(engine.safe(row)) }
+        return .Ok
+    }
+    dir := session.directory()?
+    id := if o.id == "" { f"{sys.now_ms()}-{sys.pid()}" } else { o.id.clone() }
+    file := session.file_for(dir, id)?
+    mut lock_opts := fs.OpenOptions::read_write()
+    lock_opts.set_create(true)
+    lock_opts.set_mode(384)
+    mut lock := match fs.File::open(file + ".lock", lock_opts) { .Ok(f) => move f, .Err(e) => { return .Err(e.message()) }, }
+    unsafe { if flock(lock.fd(), 6) != 0 { return .Err("Session already open.") } }
+    mut history := if o.id == "" { session.Session { root: root.value.clone(), events: [] } } else { session.resume(file, root.value)? }
+    if history.events.len > 0 && history.events[history.events.len - 1].kind == "action" {
+        session.record(&mut history, file, "notice", "Last action was interrupted. Check its effects before retrying.")?
+    }
+    mut s := ui.Screen {
+        run: engine.Run {
+            history: move history, file: file.clone(), scratch: scratch.clone(), model: o.model.clone(), check: o.check.clone(),
+            interactive: !o.batch, phase: .Idle, children: process.ChildSet::new(1), slot: -1, stdout: [], stderr: [], since: 0, steps: 0, max_steps: o.steps,
+            needs_check: false, bad_check: false, corrections: 0, pending: "", status: "Ready", failed: false
+        },
+        input: "", scroll: 0, session_id: id.clone(),
+    }
+    session.save(file, &s.run.history)?
+    _ := sys.eprint("Session " + id)
+    if !o.batch { return ui.show(&mut s) }
+    mut signals := match signal.SignalWatcher::watch(&[signal.Signal.Int, signal.Signal.Term]) { .Ok(w) => move w, .Err(e) => { return .Err(e.message()) }, }
+    engine.submit(&mut s.run, o.prompt)?
+    while s.run.phase != .Idle {
+        if signals.poll().is_some() { engine.cancel(&mut s.run)?; break }
+        match engine.poll(&mut s.run) {
+            .Ok(changed) => { if !changed { sys.sleep_ms(30) } },
+            .Err(e) => { engine.stop(&mut s.run, e) },
+        }
+    }
+    _ := lock.close()
+    if s.run.failed { return .Err(s.run.status.clone()) }
+    .Ok
+}
+
+fn main() -> i32 {
+    if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
+    if sys.arg_count() == 3 && sys.arg(1) == "--generate" {
+        return match provider.generate(sys.arg(2)) { .Ok(raw) => { print(raw); 0 }, .Err(e) => { _ := sys.eprint(e); 1 }, }
+    }
+    o := match options() { .Ok(opts) => opts, .Err(e) => { _ := sys.eprint(e); return 2 }, }
+    scratch := fs.temp_dir("dunder-agent-")
+    if !scratch.ok { _ := sys.eprint("Could not create private runtime directory."); return 1 }
+    outcome := drive(&o, scratch.value)
+    _ := fs.remove_all(scratch.value)
+    match outcome { .Ok => 0, .Err(e) => { _ := sys.eprint(engine.safe(e)); 1 }, }
+}
