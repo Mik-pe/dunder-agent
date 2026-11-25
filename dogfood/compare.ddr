@@ -69,6 +69,10 @@ fn main() -> i32 {
         assert(fs.write_private_atomic(path.join(out, log + ".stdout"), &output.stdout).is_ok())
         assert(fs.write_private_atomic(path.join(out, log + ".stderr"), &output.stderr).is_ok())
         if output.timed_out || elapsed >= budget { status = "timeout"; break }
+        if peer == "dunder" && !output.succeeded() {
+            reason := competitors.dunder_failure(output.stderr_text())
+            if reason != "" { status = reason.clone(); break }
+        }
         if competitors.provider_unavailable(peer, &output) { status = "provider-error"; break }
         if !output.succeeded() { status = "harness-error"; break }
         if id == "" && spec.followup != "" {

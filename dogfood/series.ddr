@@ -79,11 +79,18 @@ fn slot(root: string, fixture: &Fixture, peer: &Participant, rep: i32) -> string
 fn receipt(folder: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant, rep: i32) -> Result<corpus.Trial, string> {
     file := path.join(folder, "result.json")
     raw := sys.read_limit(file, 32768).ok().ok_or("Missing receipt: " + file)?
-    row := json.from_str<corpus.Trial>(raw).ok().ok_or("Invalid receipt: " + file)?
+    mut row := json.from_str<corpus.Trial>(raw).ok().ok_or("Invalid receipt: " + file)?
     if row.task != fixture.name || row.harness != peer.name || row.trial != rep.str() || row.model != cfg.model ||
     row.version != peer.version || row.fixture_sha256 != fixture.digest || row.executable_sha256 != peer.digest ||
     row.runner_sha256 != cfg.judge_digest || row.budget_ms != cfg.budget_ms || row.elapsed_ms < 0 ||
     row.manual_interventions < 0 || row.tree != fixture.tree || row.turns_started < 1 || row.turns_required < row.turns_started { return .Err("Receipt does not match frozen configuration: " + file) }
+    if row.harness == "dunder" && (row.status == "provider-error" || row.status == "harness-error") {
+        stderr := sys.read_text_limit(path.join(folder, "turn-" + row.turns_started.str() + ".stderr"), 1048576)
+        if stderr.ok {
+            reason := competitors.dunder_failure(stderr.value)
+            if reason != "" { row.status = reason.clone() }
+        }
+    }
     .Ok(row)
 }
 
@@ -102,7 +109,7 @@ fn attempt(base: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant, 
 }
 
 fn scored(status: string) -> bool {
-    values: []string = ["pass", "timeout", "missing-final-check", "missing-first-check", "public-tests", "holdout-tests", "protected-file", "invalid-tree", "oracle-file-collision", "resume-unavailable"]
+    values: []string = ["pass", "timeout", "model-timeout", "decision-limit", "model-limit", "task-incomplete", "missing-final-check", "missing-first-check", "public-tests", "holdout-tests", "protected-file", "invalid-tree", "oracle-file-collision", "resume-unavailable"]
     array.contains(&values, status)
 }
 

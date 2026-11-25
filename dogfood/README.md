@@ -51,7 +51,7 @@ build/series run build/measuring dogfood/plan.json
 build/series report build/measuring
 ```
 
-Ange ett extra heltal efter planen för att begränsa antalet nya försök. Värdet 0 låser programversioner, kontrollsummor, startrevisioner och fixturer. Samma körkommando fortsätter där serien slutade. Varje genomfört försök har ett eget kvitto. Ett identifierat leverantörsfel pausar serien och nästa körning sparar ett nytt försök bredvid det gamla. Fel som behöver granskas ligger i rapportens `review`.
+Ange ett extra heltal efter planen för att begränsa antalet nya försök. Värdet 0 låser programversioner, kontrollsummor, startrevisioner och fixturer. Samma körkommando fortsätter där serien slutade. Varje genomfört försök har ett eget kvitto. Ett identifierat leverantörsfel pausar serien och nästa körning sparar ett nytt försök bredvid det gamla. En timeout i harnessens egen HTTP-klient, en uppnådd beslutsgräns eller ett blockerat uppdrag räknas som ett misslyckat försök. Bedömaren känner igen dessa slutorsaker även i äldre kvitton via den sparade felutskriften. Fel som behöver granskas ligger i rapportens `review`.
 
 Rapporten visar hur många uppgifter som klarat två av tre försök inom tidsgränsen (`solved`) och hur många som lämnat ett godkänt filträd (`tree-verified`). Den senare kolumnen ger kredit även om tiden löper ut under slutsvaret. `fully-tested` räknar uppgifter med tre poängsatta försök. Mediantiden gäller alla poängsatta försök, inklusive timeout. Rangordningen fastställs när alla uppgifter har tre bedömda försök.
 
