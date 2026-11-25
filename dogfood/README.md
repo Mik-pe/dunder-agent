@@ -87,6 +87,18 @@ Efter kvotåterställningen klarade även Pi, Kilo och Cline sina första CSV-f�
 
 Alla tre av Dunders inlämningar kunde byggas upp igen genom att spela upp sessionens bekräftade filändringar från den låsta startrevisionen. CSV- och cachereparationerna klarade både publika och dolda tester på nytt. I `billing-resume` återkom ändringen i det skyddade testet och båda testkommandona gav felkod.
 
+### Spela upp ett eget Dunder-försök
+
+Kör från repots rot med försökets `result.json`, felloggarna per tur och den ursprungliga sessionen kvar i Dunder Agents lokala sessionskatalog. Kommandot återskapar bekräftade filändringar i en tillfällig arbetskatalog och kör uppgiftens tester lokalt. Det använder ingen modellnyckel.
+
+```sh
+dunder build dogfood/replay.ddr --offline --locked -o build/replay
+dunder run dogfood/replay_test.ddr --offline --locked -- build/replay
+build/replay build/measuring/csv/dunder-1
+```
+
+Utskriften visar antal återspelade skrivningar, filträdets bedömning och SHA-256 för det återskapade innehållet. Felkod 0 betyder att bedömningen stämmer med kvittots `tree_status`, även när uppgiften misslyckades. Avvikande fixtur, startrevision, deluppgift eller testutfall ger felkod. Tidsbudgeten bedöms i den ursprungliga körningen.
+
 ## Kör eller återuppta serien
 
 Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunder Agent enligt rotens README. Planen väljer deltagare och körbara filer. Alla deltagare körs en i taget. Varje uppgift får tre försök per deltagare och startordningen växlar.

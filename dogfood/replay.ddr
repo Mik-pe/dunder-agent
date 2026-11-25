@@ -1,0 +1,112 @@
+capability filesystem, process, stdio
+import .corpus
+import ..src.session
+import ..src.workspace
+import std.array as array
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.text as text
+import sys
+
+fn load(file: string, limit: i64) -> Result<string, string> {
+    match sys.read_limit(file, limit) { .Ok(v) => .Ok(move v), .Err(e) => .Err(e.message()), }
+}
+
+fn journal_file(dir: string, turn: i32) -> Result<string, string> {
+    log := load(path.join(dir, f"turn-{turn}.stderr"), 1048576)?
+    mut id := ""
+    for line in text.split(log, "\n") {
+        if text.starts_with(line, "Session ") {
+            if id != "" { return .Err("Ambiguous session ID.") }
+            id = text.trim(line[8..line.len])
+        }
+    }
+    session.file_for(session.state_dir(), id)
+}
+
+fn apply_events(saved: &session.Session, spec: &corpus.Case, turns: i32, work: string) -> Result<i32, string> {
+    mut turn := 0
+    mut edits := 0
+    stamp := path.join(path.dirname(work), "checked")
+    for i in 0..saved.events.len {
+        event := &saved.events[i]
+        if event.kind == "user" {
+            turn += 1
+            if turn > turns { return .Err("The session extends beyond the recorded trial.") }
+            task := if turn == 1 { spec.prompt.clone() } else { spec.followup.clone() }
+            if event.body != corpus.trial_prompt(task) { return .Err("Session prompt differs from fixture.") }
+            if turn > 1 {
+                if !corpus.has_passing_check(work, corpus.snapshot(work, "")?) { return .Err("First turn lacks a passing check on its final tree.") }
+                if !sys.remove_file(stamp).ok { return .Err("Could not reset the check stamp.") }
+            }
+            continue
+        }
+        if event.kind == "result" && event.body == "Saved." && (i == 0 || saved.events[i - 1].kind != "action") { return .Err("Write confirmation without an action.") }
+        if event.kind != "action" { continue }
+        if turn == 0 || i + 1 >= saved.events.len || saved.events[i + 1].kind != "result" { return .Err("Incomplete action in session.") }
+        action := json.Doc::parse_text(event.body)
+        tool := action.get_str(action.root, "tool").ok_or("Missing tool in recorded action.")?
+        result := &saved.events[i + 1].body
+        if action.field(action.root, "reference") >= 0 {
+            if tool == "list" || tool == "read" || tool == "read_many" || tool == "search" || text.starts_with(result, "Error: ") { continue }
+            return .Err("Unsupported reference action.")
+        }
+        match tool {
+            "edit" | "create" => {
+                if text.starts_with(result, "Error: ") { continue }
+                if result != "Saved." || workspace.execute(work, &action)? != "Saved." { return .Err("Could not reproduce recorded edit.") }
+                edits += 1
+            },
+            "check" => {
+                green := text.starts_with(result, "exit 0, signal 0\n")
+                if !green && !text.starts_with(result, "exit 1, signal 0\n") { return .Err("Uncertain check outcome.") }
+                passed := corpus.call(work, &spec.visible).succeeded()
+                if passed != green { return .Err("Public check diverged from session.") }
+                if passed { workspace.io_status(fs.write_private_text_atomic(stamp, corpus.snapshot(work, "")?))? }
+            },
+            "list" | "read" | "read_many" | "search" => {},
+            "edit_many" => {
+                if !text.starts_with(result, "Error: ") { return .Err("Batch has no per-file write confirmations.") }
+            },
+            "shell" => {
+                if result != "Error: Shell requires the interactive TUI." && result != "Error: Command declined by user." && result != "Error: Invalid shell command." { return .Err("Session contains an unverified shell action.") }
+            },
+            _ => { return .Err("Unsupported recorded tool.") },
+        }
+    }
+    if turn != turns { return .Err("Incomplete turn history.") }
+    .Ok(edits)
+}
+
+fn replay(dir: string) -> Result<string, string> {
+    raw := load(path.join(dir, "result.json"), 16384)?
+    row := match json.from_str<corpus.Trial>(raw) { .Ok(v) => move v, .Err(e) => { return .Err(e.message.clone()) }, }
+    if row.harness != "dunder" { return .Err("Expected a Dunder Agent trial.") }
+    cases := fs.list_dir("dogfood/cases").unwrap_or_default()
+    if !array.contains(&cases, row.task) { return .Err("Unknown fixture. Run from the repository root.") }
+    fixture := path.join("dogfood/cases", row.task)
+    if corpus.fixture_digest(fixture) != row.fixture_sha256 { return .Err("Fixture digest differs from receipt.") }
+    spec := json.from_str<corpus.Case>(load(path.join(fixture, "case.json"), 65536)?).unwrap()
+    expected := if spec.followup == "" { 1 } else { 2 }
+    if row.turns_required != expected || row.turns_started < 1 || row.turns_started > expected { return .Err("Invalid turn count.") }
+    file := journal_file(dir, 1)?
+    if row.turns_started == 2 && file != journal_file(dir, 2)? { return .Err("Follow-up uses a different session.") }
+    if !sys.metadata(file).is_file { return .Err("Archived session is missing from the local session store.") }
+    saved := match json.from_str<session.Session>(load(file, 8388608)?) { .Ok(v) => move v, .Err(e) => { return .Err(e.message.clone()) }, }
+    scratch := fs.temp_dir("dunder-replay-")
+    if !scratch.ok { return .Err("Could not create replay directory.") }
+    defer { _ := fs.remove_all(scratch.value) }
+    work := path.join(scratch.value, "work")
+    if corpus.seed(fixture, work) != row.tree { return .Err("Seed commit differs from receipt.") }
+    edits := apply_events(&saved, &spec, row.turns_started, work)?
+    digest := corpus.snapshot(work, "")?
+    grade := corpus.grade(&spec, fixture, work, path.join(scratch.value, "oracle"))
+    if grade != row.tree_status { return .Err(f"Tree outcome diverged: replay {grade}, receipt {row.tree_status}.") }
+    .Ok(f"{row.task}  edits={edits}  tree={grade}  sha256={digest}")
+}
+
+fn main() -> i32 {
+    if sys.arg_count() != 2 { _ := sys.eprint("replay TRIAL-DIRECTORY"); return 2 }
+    match replay(sys.arg(1)) { .Ok(result) => { print(result); 0 }, .Err(reason) => { _ := sys.eprint(reason); 1 }, }
+}

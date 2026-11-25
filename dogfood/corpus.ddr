@@ -14,6 +14,10 @@ pub struct Case {
     oracle: string, protected: []string,
 }
 
+pub fn trial_prompt(task: string) -> string {
+    task + " Run ./check after the final change. Work only in this local repository."
+}
+
 pub fn call(cwd: string, argv: &[]string) -> process.Output {
     mut cmd := process.Command::new(argv[0].clone(), (&argv[1..argv.len]).clone())
     cmd.set_cwd(cwd.clone())

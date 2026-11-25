@@ -1,0 +1,106 @@
+capability filesystem, process, stdio
+import .corpus
+import ..src.session
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+fn event(kind: string, body: string) -> session.Event {
+    session.Event { kind: kind.clone(), body: body.clone() }
+}
+
+fn expect(app: string, dir: string, saved: &session.Session, success: bool, fragment: string) {
+    file := path.join(dir, "state/dunder-agent/100-1.json")
+    assert(session.save(file, &saved).is_ok())
+    mut cmd := process.Command::new(app.clone(), [dir.clone()])
+    cmd.set_env("XDG_STATE_HOME", path.join(dir, "state"))
+    result := cmd.exec()
+    assert(result.succeeded() == success)
+    assert(text.contains(result.stdout_text() + result.stderr_text(), fragment))
+}
+
+fn main() -> i32 {
+    if sys.arg_count() != 2 { _ := sys.eprint("replay_test REPLAY-EXECUTABLE"); return 2 }
+    app := fs.realpath(sys.arg(1)).value
+    dir := fs.temp_dir("replay-test-").value
+    defer { _ := fs.remove_all(dir) }
+    assert(fs.mkdir_all(path.join(dir, "state/dunder-agent")).ok)
+    log := path.join(dir, "turn-1.stderr")
+    assert(sys.write(log, "Session 100-1\n").is_ok())
+    fixture := "dogfood/cases/limit"
+    spec := json.from_str<corpus.Case>(sys.read(path.join(fixture, "case.json")).unwrap()).unwrap()
+    mut row := corpus.Trial {
+        task: "limit", harness: "dunder", model: "fixture", trial: "1", version: "test",
+        executable_sha256: "", runner_sha256: "", fixture_sha256: corpus.fixture_digest(fixture),
+        tree: corpus.seed(fixture, path.join(dir, "seed")), status: "pass", tree_status: "pass",
+        turns_started: 1, turns_required: 1, elapsed_ms: 100, budget_ms: 300000, manual_interventions: 0, exit_code: 0, signal: 0,
+    }
+    receipt := path.join(dir, "result.json")
+    assert(sys.write(receipt, json.to_string(&row).unwrap()).is_ok())
+    fix := r#"{"tool":"edit","path":"limit.ddr","old":"if value > high { return low }","new":"if value > high { return high }"}"#
+    mut saved := session.Session { root: "retired-workspace", events: [
+        event("user", corpus.trial_prompt(spec.prompt)), event("action", fix), event("result", "Saved."),
+        event("action", r#"{"tool":"check"}"#), event("result", "exit 0, signal 0\n"),
+    ] }
+    expect(app, dir, &saved, true, "edits=1  tree=pass")
+    saved.events[4].body = "exit 1, signal 0\n"
+    expect(app, dir, &saved, false, "check diverged")
+    _ := saved.events.pop()
+    _ := saved.events.pop()
+    expect(app, dir, &saved, false, "missing-final-check")
+    row.tree_status = "missing-final-check"
+    row.status = "missing-final-check"
+    assert(sys.write(receipt, json.to_string(&row).unwrap()).is_ok())
+    saved.events[2].body = "Error: edit rejected"
+    expect(app, dir, &saved, true, "edits=0  tree=missing-final-check")
+    saved.events.push(event("action", r#"{"tool":"shell","command":"exit 0"}"#))
+    expect(app, dir, &saved, false, "Incomplete action")
+    saved.events.push(event("result", "exit 0, signal 0\n"))
+    expect(app, dir, &saved, false, "unverified shell")
+    saved.events[4].body = "Error: Shell requires the interactive TUI."
+    expect(app, dir, &saved, true, "edits=0")
+    saved.events.push(event("user", "Another task"))
+    expect(app, dir, &saved, false, "beyond the recorded trial")
+    _ := saved.events.pop()
+    saved.events[0].body = "Different task"
+    expect(app, dir, &saved, false, "prompt differs")
+    assert(sys.write(log, "Session 200-1\n").is_ok())
+    expect(app, dir, &saved, false, "Archived session is missing")
+    row.fixture_sha256 = "wrong"
+    assert(sys.write(receipt, json.to_string(&row).unwrap()).is_ok())
+    expect(app, dir, &saved, false, "Fixture digest differs")
+    resumed_fixture := "dogfood/cases/billing-resume"
+    resumed_spec := json.from_str<corpus.Case>(sys.read(path.join(resumed_fixture, "case.json")).unwrap()).unwrap()
+    seed := path.join(dir, "billing")
+    row.tree = corpus.seed(resumed_fixture, seed)
+    row.task = "billing-resume"
+    row.fixture_sha256 = corpus.fixture_digest(resumed_fixture)
+    row.turns_started = 2
+    row.turns_required = 2
+    assert(sys.write(receipt, json.to_string(&row).unwrap()).is_ok())
+    file := path.join(seed, "billing.ddr")
+    before := sys.read(file).unwrap()
+    patch := fs.realpath(path.join(resumed_fixture, "reference.patch")).value
+    assert(corpus.call(seed, ["git", "apply", patch]).succeeded())
+    op := r#"{"tool":"edit","path":"billing.ddr","old":"# + json.quote(before) + r#","new":"# + json.quote(sys.read(file).unwrap()) + "}"
+    check := event("action", r#"{"tool":"check"}"#)
+    ok := event("result", "exit 0, signal 0\n")
+    saved.events = [event("user", corpus.trial_prompt(resumed_spec.prompt)), event("action", op), event("result", "Saved."), check.clone(), ok.clone(), event("user", corpus.trial_prompt(resumed_spec.followup))]
+    second := path.join(dir, "turn-2.stderr")
+    assert(sys.write(log, "Session 100-1\n").is_ok())
+    assert(sys.write(second, "Session 200-1\n").is_ok())
+    expect(app, dir, &saved, false, "different session")
+    assert(sys.write(second, "Session 100-1\n").is_ok())
+    expect(app, dir, &saved, true, "tree=missing-final-check")
+    saved.events.push(check.clone())
+    saved.events.push(ok.clone())
+    row.tree_status = "pass"
+    row.status = "pass"
+    assert(sys.write(receipt, json.to_string(&row).unwrap()).is_ok())
+    expect(app, dir, &saved, true, "tree=pass")
+    print("PASS offline replay, receipt and session validation, check divergence, incomplete and denied actions")
+    0
+}
