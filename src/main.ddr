@@ -84,7 +84,7 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
     }
     mut s := ui.Screen {
         run: engine.Run {
-            history: move history, file: file.clone(), scratch: scratch.clone(), model: o.model.clone(), check: o.check.clone(),
+            history: move history, file: file.clone(), scratch: scratch.clone(), model: o.model.clone(), check: o.check.clone(), root_entries: "",
             interactive: !o.batch, phase: .Idle, children: process.ChildSet::new(1), slot: -1, stdout: [], stderr: [], since: 0, steps: 0, max_steps: o.steps,
             needs_check: false, bad_check: false, corrections: 0, pending: "", status: "Ready", failed: false
         },
@@ -99,7 +99,7 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
 }
 
 fn main() -> i32 {
-    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.1.0"); return 0 }
+    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.2.0"); return 0 }
     if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
     if sys.arg_count() == 3 && sys.arg(1) == "--generate" {
         return match provider.generate(sys.arg(2)) { .Ok(raw) => { print(raw); 0 }, .Err(e) => { _ := sys.eprint(e); 1 }, }

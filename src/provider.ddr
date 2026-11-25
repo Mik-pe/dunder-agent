@@ -15,7 +15,7 @@ import sys
 const CONTRACT: string = @embed_file("src/contract.txt")
 pub const MODEL: string = "zai-coding-plan/glm-5.4"
 
-pub fn launch(dir: string, model: string, check: string, interactive: bool, state: &session.Session) -> Result<process.Child, string> {
+pub fn launch(dir: string, model: string, check: string, root_entries: string, interactive: bool, state: &session.Session) -> Result<process.Child, string> {
     rules_file := path.join(state.root, "AGENTS.md")
     mut rules := ""
     if !fs.is_symlink(rules_file) && sys.metadata(rules_file).is_file {
@@ -23,7 +23,7 @@ pub fn launch(dir: string, model: string, check: string, interactive: bool, stat
         if !instructions.ok { return .Err("Could not read AGENTS.md (limit 64 KiB).") }
         rules = instructions.value
     }
-    input := r#"{"check":"# + json.quote(check) + r#","interactive":"# + interactive.str() + r#","instructions":"# + json.quote(rules) + r#","events":"# + session.context(&state) + "}"
+    input := r#"{"check":"# + json.quote(check) + r#","rootEntriesAtTurnStart":"# + json.quote(root_entries) + r#","interactive":"# + interactive.str() + r#","instructions":"# + json.quote(rules) + r#","events":"# + session.context(&state) + "}"
     parts := text.split(model, "/")
     if parts.len != 2 || parts[0] == "" || parts[1] == "" { return .Err("Expected provider/model.") }
     request := r#"{"model":{"providerID":"# + json.quote(parts[0]) + r#","id":"# + json.quote(parts[1]) + r#"},"prompt":"# + json.quote(CONTRACT + "\n" + input) + "}"

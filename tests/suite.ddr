@@ -94,3 +94,22 @@ fn tool(root: string, args: string) -> Result<string, string> {
     assert(sys.metadata(file).mode.bit_and(511) == 384)
     assert(session.resume(file, "/another-repo").is_err())
 }
+
+@test fn read_many_preserves_paths_partial_errors_and_utf8_offsets() {
+    dir := fs.temp_dir("dunder-batch-read-").value
+    defer { _ := fs.remove_all(dir) }
+    assert(sys.write(path.join(dir, "a"), text.pad_left("å", 4096, "x") + "z").is_ok())
+    assert(sys.write(path.join(dir, "b"), "line one\nline two").is_ok())
+    assert(fs.symlink(dir, path.join(dir, "symlink")).ok)
+    raw := tool(dir, r#"{"tool":"read_many","paths":["b","../bad","a","symlink/b"]}"#).unwrap()
+    replies := json.Doc::parse_text(raw)
+    assert(replies.count(replies.root) == 4)
+    assert(replies.get_str(replies.at(replies.root, 0), "content").unwrap() == "line one\nline two")
+    assert(replies.get_str(replies.at(replies.root, 1), "error").is_some())
+    long_file := replies.at(replies.root, 2)
+    assert(replies.get_str(long_file, "path").unwrap() == "a")
+    assert(text.ends_with(replies.get_str(long_file, "content").unwrap(), "[continue at byte 4095]"))
+    assert(replies.get_str(replies.at(replies.root, 3), "error").is_some())
+    assert(tool(dir, r#"{"tool":"read_many","paths":[]}"#).is_err())
+    assert(tool(dir, r#"{"tool":"read_many","paths":["a","a","a","a","a","a","a","a","a"]}"#).is_err())
+}

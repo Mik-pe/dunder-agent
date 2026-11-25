@@ -35,7 +35,7 @@ fn read_file(file: string) -> Result<string, string> {
     match sys.read_limit(file, 524288) { .Ok(v) => .Ok(v), .Err(e) => .Err(e.message()), }
 }
 
-fn listing(dir: string) -> Result<string, string> {
+pub fn listing(dir: string) -> Result<string, string> {
     mut names := match fs.list_dir(dir) { .Ok(v) => v, .Err(e) => { return .Err(e.message()) }, }
     array.sort(&mut names)
     mut lines: []string = []
@@ -96,6 +96,33 @@ fn change(file: string, args: &json.Doc, create: bool) -> Result<string, string>
     .Ok("Saved.")
 }
 
+fn page(root: string, relative: string, start: i64, size: i32) -> Result<string, string> {
+    file := read_file(location(root, relative)?)?
+    if start < 0 || start > i64(file.len) || (start < i64(file.len) && file[i32(start)] >= 128 && file[i32(start)] < 192) {
+        return .Err("Invalid UTF-8 byte offset.")
+    }
+    mut end := i32(start) + size
+    if end >= file.len { return .Ok(file[i32(start)..file.len]) }
+    while file[end] >= 128 && file[end] < 192 { end -= 1 }
+    .Ok(file[i32(start)..end] + f"\n[continue at byte {end}]")
+}
+
+fn read_many(root: string, args: &json.Doc) -> Result<string, string> {
+    paths := args.field(args.root, "paths")
+    n := args.count(paths)
+    if args.kind(paths) != .Array || n < 1 || n > 8 { return .Err("Pass 1 to 8 file paths.") }
+    mut rows: []string = []
+    for i in 0..n {
+        name := args.as_str(args.at(paths, i)).ok_or("Each path must be a string.")?
+        line := match page(root, name, 0, 4096) {
+            .Ok(value) => r#","content":"# + json.quote(value),
+            .Err(reason) => r#","error":"# + json.quote(reason),
+        }
+        rows.push(r#"{"path":"# + json.quote(name) + line + "}")
+    }
+    .Ok("[" + array.join(&rows, ",") + "]")
+}
+
 pub fn execute(root: string, args: &json.Doc) -> Result<string, string> {
     tool := args.get_str(args.root, "tool").unwrap_or_default()
     relative := args.get_str(args.root, "path").unwrap_or_default()
@@ -104,17 +131,8 @@ pub fn execute(root: string, args: &json.Doc) -> Result<string, string> {
             if relative == "" || relative == "." { return listing(root) }
             listing(location(root, relative)?)
         },
-        "read" => {
-            file := read_file(location(root, relative)?)?
-            start := args.get_i64(args.root, "offset").unwrap_or(0)
-            if start < 0 || start > i64(file.len) || (start < i64(file.len) && file[i32(start)] >= 128 && file[i32(start)] < 192) {
-                return .Err("Invalid UTF-8 byte offset.")
-            }
-            mut end := i32(start) + 16000
-            if end >= file.len { return .Ok(file[i32(start)..file.len]) }
-            while file[end] >= 128 && file[end] < 192 { end -= 1 }
-            .Ok(file[i32(start)..end] + f"\n[continue at byte {end}]")
-        },
+        "read" => page(root, relative, args.get_i64(args.root, "offset").unwrap_or(0), 16000),
+        "read_many" => read_many(root, &args),
         "search" => {
             query := args.get_str(args.root, "query").ok_or("Missing search text.")?
             if query.len == 0 { return .Err("Empty search.") }

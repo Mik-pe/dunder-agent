@@ -30,6 +30,18 @@ fn reply(req: &http.Request) -> string {
         body_text = envelope.get_str(e, "body").unwrap()
         if last == "user" { task = body_text.clone() }
     }
+    if task == "one batch" {
+        assert(text.contains(envelope.get_str(envelope.root, "rootEntriesAtTurnStart").unwrap(), "note.txt"))
+        if last == "user" { return r#"{"tool":"read_many","paths":["note.txt","absent"]}"# }
+        if text.starts_with(body_text, "[") {
+            files := json.Doc::parse_text(body_text)
+            assert(files.get_str(files.at(files.root, 0), "content").unwrap() == "old")
+            assert(files.get_str(files.at(files.root, 1), "error").is_some())
+            return r#"{"tool":"edit","path":"note.txt","old":"old","new":"checked","check":true}"#
+        }
+        assert(text.starts_with(body_text, "exit 0, signal 0"))
+        return r#"{"tool":"finish","answer":"Checked."}"#
+    }
     if task == "follow up" {
         assert(envelope.count(events) >= 7)
         return r#"{"tool":"finish","answer":"Resumed."}"#
@@ -86,6 +98,10 @@ fn main() -> i32 {
     defer { _ := server.kill(); _ := server.wait(1000) }
     assert(server.read_stdout_line(5000).unwrap().is_some())
     note := path.join(dir, "note.txt")
+    assert(sys.write(note, "old").is_ok())
+    batched := run(app, dir, ["--check", "test \"$(cat note.txt)\" = checked", "--max-steps", "3", "run", "one batch"])
+    assert(batched.succeeded() && batched.stdout_text() == "Checked.\n")
+    assert(text.contains(batched.stderr_text(), "check exit 0"))
     assert(sys.write(note, "old").is_ok())
     turn := run(app, dir, ["--check", "test \"$(cat note.txt)\" = new", "run", "repair"])
     assert(turn.succeeded())
