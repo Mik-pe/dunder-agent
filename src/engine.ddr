@@ -37,13 +37,6 @@ pub fn label(action: &json.Doc) -> string {
 
 pub fn event(run: &mut Run, kind: string, body: string) -> Result<(), string> {
     session.record(&mut run.history, run.file, kind, body)?
-    if !run.interactive {
-        if kind == "assistant" { print(safe(body)) }
-        if kind == "action" {
-            doc := json.Doc::parse_text(body)
-            _ := sys.eprint("· " + safe(label(&doc)))
-        }
-    }
     .Ok
 }
 
@@ -87,6 +80,7 @@ fn result(run: &mut Run, move outcome: Result<string, string>) -> Result<(), str
 fn shell(run: &mut Run, command: string, phase: Phase) -> Result<(), string> {
     mut cmd := process.Command::new("/bin/sh", ["-c", command.clone()])
     cmd.set_cwd(run.history.root.clone())
+    cmd.set_env("PWD", run.history.root.clone())
     match cmd.spawn() {
         .Ok(child) => { start_child(&mut run, move child, phase, "Running local command"); .Ok },
         .Err(e) => {
@@ -179,7 +173,6 @@ pub fn poll(run: &mut Run) -> Result<bool, string> {
         if run.phase == .Check {
             run.needs_check = false
             run.bad_check = waited.code != 0 || waited.signal != 0
-            if !run.interactive { _ := sys.eprint(f"  check exit {waited.code}, signal {waited.signal}") }
         } else { run.needs_check = true }
         report := workspace.clip(f"exit {waited.code}, signal {waited.signal}\n" + stdout + stderr, 16000)
         result(&mut run, .Ok(report))?

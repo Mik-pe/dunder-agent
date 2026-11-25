@@ -1,0 +1,72 @@
+capability stdio, filesystem, process
+import std.io as io
+import std.json as json
+import std.process as process
+import std.signal as signal
+import std.terminal as terminal
+import std.text as text
+import std.time as clock
+import .engine
+import .mascot
+import sys
+
+pub fn mood(phase: engine.Phase) -> string {
+    match phase { .Model => "thinking", .Command => "check", .Check => "check", .Approval => "approval", _ => "idle", }
+}
+
+fn emit(run: &engine.Run, cursor: &mut i32) {
+    while cursor < run.history.events.len {
+        index := cursor
+        cursor += 1
+        entry := &run.history.events[index]
+        if entry.kind == "action" {
+            action := json.Doc::parse_text(entry.body)
+            _ := sys.eprint("· " + engine.safe(engine.label(&action)))
+        } else if entry.kind == "assistant" {
+            print(engine.safe(entry.body))
+        } else if entry.kind == "result" && index > 0 && text.starts_with(entry.body, "exit ") {
+            prev := &run.history.events[index - 1]
+            action := json.Doc::parse_text(prev.body)
+            if prev.kind == "action" && action.get_str(action.root, "tool").unwrap_or_default() == "check" {
+                _ := sys.eprint("  check " + text.split(entry.body, "\n")[0])
+            }
+        }
+    }
+}
+
+pub fn batch(run: &mut engine.Run, prompt: string, plain: bool) -> Result<(), string> {
+    mut signals := match signal.SignalWatcher::watch(&[signal.Signal.Int, signal.Signal.Term]) { .Ok(w) => move w, .Err(e) => { return .Err(e.message()) }, }
+    mut cursor := run.history.events.len
+    engine.submit(&mut run, prompt)?
+    animate := !plain && io.stderr().is_tty() && io.stdout().is_tty() && process.env_or("TERM", "") != "dumb"
+    color := process.env("NO_COLOR").is_none()
+    mut drawn := false
+    mut previous_tick := i64(-1)
+    defer { if drawn { _ := sys.write_stderr("\r\u{1b}[2K") } }
+    while run.phase != .Idle {
+        if signals.poll().is_some() { engine.cancel(&mut run)?; break }
+        changed := match engine.poll(&mut run) { .Ok(v) => v, .Err(e) => { engine.stop(&mut run, e); true }, }
+        if cursor != run.history.events.len {
+            if drawn { _ := sys.write_stderr("\r\u{1b}[2K"); drawn = false }
+            emit(&run, &mut cursor)
+        }
+        tick := clock.monotonic_ms() / 160
+        if animate && run.phase != .Idle && tick != previous_tick {
+            previous_tick = tick
+            size := terminal.window_size(2)
+            columns := match size { .Ok(s) => s.columns, .Err(_) => 0, }
+            if columns >= 18 {
+                head := mascot.face(mood(run.phase), tick)
+                label := if columns >= 52 { "  Muller · " + run.status } else { "" }
+                style := if color { "\u{1b}[38;5;221m" } else { "" }
+                reset := if color { "\u{1b}[0m" } else { "" }
+                _ := sys.write_stderr("\r\u{1b}[2K" + style + head + reset + label)
+                drawn = true
+            } else if drawn { _ := sys.write_stderr("\r\u{1b}[2K"); drawn = false }
+        }
+        if !changed { sys.sleep_ms(30) }
+    }
+    emit(&run, &mut cursor)
+    if run.failed { return .Err(run.status.clone()) }
+    .Ok
+}

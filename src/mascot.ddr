@@ -1,0 +1,140 @@
+capability process, stdio
+import std.cmp as cmp
+import std.io as io
+import std.process as process
+import tui
+import tui.canvas as canvas
+
+const TROLL: [string; 20] = [
+    "             ++          ",
+    "            +*+          ",
+    "         +++*+           ",
+    "         =+*++           ",
+    "       dsss+*ssdd        ",
+    "      dshhss+ssssd       ",
+    "  dd dshhhss+ssslld  dd  ",
+    " dhhdshssssssssssssdshhd ",
+    "  dsddllllsslsslllddssd  ",
+    "   ddssseeennneesssddd   ",
+    "    dssseednnndeessd     ",
+    "    ddsssnnnhnnssldd     ",
+    "     dsssdnnnndssld      ",
+    "    ddlswtddddtwlddd     ",
+    "   dshllsssddsslllshd    ",
+    "  dhssldsshhssslldsssd   ",
+    "  dssdd lsshsllld dssd   ",
+    "   dd   dlllldld   dd    ",
+    "       dshsddslld        ",
+    "      dsssdd dsssd       ",
+]
+
+fn pigment(b: u8, blink: bool, charged: bool) -> u32 {
+    match b {
+        b'd' => 0x1c233d, b'l' => 0x425077, b's' => 0x7584a4, b'h' => 0xa1b3c8,
+        b'n' => 0x8b7186, b'e' => if blink { 0x35405b } else if charged { 0xfff7d1 } else { 0xffc965 },
+        b't' => 0xae987e, b'w' => 0xffe7b8, b'=' => 0xe97343, b'+' => 0xffb547, b'*' => 0xffffc2,
+        _ => 0,
+    }
+}
+
+fn wave(x: i32, length: i32) -> i32 {
+    phase := x % (length * 2)
+    if phase < length { phase } else { length * 2 - phase }
+}
+
+fn lightning(pic: &mut canvas.Canvas, x: i32, y: i32, beat: i32) {
+    if beat >= 5 { return }
+    color := if beat < 2 { u32(0xffffc2) } else { u32(0xcf914f) }
+    pic.line(x + 8, 0, x + 2, y / 2, color)
+    pic.line(x + 2, y / 2, x + 6, y / 2, color)
+    pic.line(x + 6, y / 2, x, y, color)
+    if beat < 2 { pic.line(x + 4, y / 2, x + 10, y / 2 + 1, 0xf6bb66) }
+}
+
+pub fn landscape(frame: &mut tui.Frame, area: tui.Rect, elapsed: i64) {
+    w := cmp.min<i32>(96, area.w)
+    h := cmp.min<i32>(42, area.h * 2)
+    if w < 27 || h < 20 { return }
+    mut pic := canvas.Canvas::new(w, h, 0x10182c)
+    t := i32((elapsed / 100) % 100000)
+    beat := t % 53
+    for y in 0..h {
+        color := canvas.mix(0x10182c, 0x29354e, f64(y) / f64(h))
+        pic.line(0, y, w - 1, y, color)
+    }
+    for i in 0..(w / 3) {
+        x := (i * 23 + 3) % w
+        y := (i * 11 + 1) % cmp.max<i32>(1, h - 9)
+        pic.point(x, y, if (t / 5 + i) % 7 == 0 { 0xbddad3 } else { 0x52617a })
+    }
+    for x in 0..w {
+        far := h - 7 - wave(x + 4, 13) / 2
+        near := h - 3 - wave(x + 13, 17) / 3
+        pic.line(x, far, x, h - 1, 0x343d59)
+        pic.line(x, near, x, h - 1, 0x242c45)
+    }
+    x0 := w / 2 - 12
+    ground := h - 2
+    pic.line(x0 + 4, ground, x0 + 20, ground, 0x141b30)
+    bob := if (t / 7) % 2 == 0 && beat > 4 { 1 } else { 0 }
+    y0 := ground - 20 + bob
+    lightning(&mut pic, x0 + 13, y0 + 3, beat)
+    blink := beat == 24 || beat == 25
+    for y in 0..TROLL.len {
+        row := TROLL[y]
+        for x in 0..row.len {
+            if row[x] != b' ' { pic.point(x0 + x, y0 + y, pigment(row[x], blink, beat < 5)) }
+        }
+    }
+    for side in [-1, 1] {
+        if beat < 11 {
+            age := beat / 2
+            x := x0 + 12 + side * (8 + age)
+            y := y0 + 9 - age
+            pic.point(x, y, 0xffda83)
+            if beat < 4 { pic.line(x - 1, y, x + 1, y, 0xffda83); pic.line(x, y - 1, x, y + 1, 0xffda83) }
+        }
+    }
+    pic.render(&mut frame, tui.Rect::new(area.x + (area.w - w) / 2, area.y + (area.h - h / 2) / 2, w, h / 2))
+}
+
+pub fn face(mood: string, tick: i64) -> string {
+    if mood == "check" { return if tick % 4 < 2 { "ϟ ◢(•̀‿•́)◣" } else { "ϟ ◢(•̀ᴗ•́)◣" } }
+    if mood == "approval" { return "ϟ ◢(•_•)◣ ?" }
+    if mood == "thinking" {
+        match i32(tick % 6) {
+            0 => "· ◢(•‿•)◣", 1 => "ϟ ◢(•‿•)◣", 2 => "ϟ ◢(•‿•)◣ ·",
+            3 => "ϟ ◢(•‿•)◣ ✦", 4 => "· ◢(•‿•)◣ ·", _ => "· ◢(˘‿˘)◣",
+        }
+    } else if tick % 35 == 24 { "ϟ ◢(˘‿˘)◣" } else { "ϟ ◢(•‿•)◣" }
+}
+
+struct Weather { elapsed: i64, origin: i64 }
+
+fn draw(frame: &mut tui.Frame, storm: &Weather) {
+    area := frame.area()
+    (title, rest) := area.rows(1)
+    frame.text(title, " Muller", tui.ink(tui.rgb(0xffc965)).bold())
+    (sky, keys) := rest.rows(cmp.max<i32>(0, rest.h - 1))
+    if sky.w < 27 || sky.h < 10 {
+        frame.text(sky, face("thinking", storm.elapsed / 125), tui.ink(.LightYellow))
+    } else { landscape(&mut frame, sky, storm.elapsed - storm.origin) }
+    frame.text(keys, " Space thunder   q quit", tui.ink(.DarkGray))
+}
+
+fn key(storm: &mut Weather, input: tui.Key) -> bool {
+    match input {
+        .Escape => false,
+        .Char(c) if c == `q` => false,
+        .Char(c) if c == ` ` => { storm.origin = storm.elapsed; true },
+        _ => true,
+    }
+}
+
+fn tick(storm: &mut Weather, elapsed: i64) -> bool { storm.elapsed = elapsed; true }
+
+pub fn show(plain: bool) -> Result<(), string> {
+    if plain || !io.stdout().is_tty() || !io.stdin().is_tty() || process.env_or("TERM", "") == "dumb" { print("Muller  " + face("idle", 0)); return .Ok }
+    mut weather := Weather { elapsed: 0, origin: 0 }
+    tui.animate(&mut weather, 10, draw, key, tick)
+}

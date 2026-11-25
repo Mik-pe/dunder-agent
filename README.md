@@ -8,18 +8,26 @@ Bygg med Dunder 0.12.1. Du behöver ripgrep för sökning och OpenCode 2.3.2 med
 
 ```sh
 dunder build --locked -o build/dunder-agent
-./build/dunder-agent --workspace . --check 'dunder test'
+install -d "$HOME/.local/bin"
+install -m 755 build/dunder-agent "$HOME/.local/bin/dunder-agent"
+dunder-agent
 ```
+
+Åsktrollet **Muller** möter dig på startskärmen och visar när modellen tänker, kör ett kommando eller väntar på ett godkännande. Kör `dunder-agent mascot` för att se honom i sitt oväder. Mellanslag kallar ned blixten och q eller Esc avslutar.
+
+![Muller i terminalen med ett blixtnedslag över bergen](docs/muller.gif)
 
 Enter skickar en uppgift. Piltangenterna rullar historiken. Esc avbryter ett pågående modell- eller kommandoanrop. När agenten är ledig avslutar Esc terminalen. Ett skalkommando som modellen föreslår visas före körning och kräver ett tryck på y. Tryck n för att neka.
 
 Kör kommandona från projektets rot. Med `--workspace DIR` kan du välja en annan arbetskatalog.
 
 ```sh
-./build/dunder-agent --workspace . --check 'dunder test' run 'Fixa det röda testet'
-./build/dunder-agent --workspace . --sessions
-./build/dunder-agent --workspace . --resume SESSION_ID --check 'dunder test'
+dunder-agent --workspace . --check 'dunder test' run 'Fixa det röda testet'
+dunder-agent --workspace . --sessions
+dunder-agent --workspace . --resume SESSION_ID --check 'dunder test'
 ```
+
+I en terminal visar `run` Mullers arbetsstatus på stderr. När utdata omdirigeras går bara slutsvaret till stdout. Använd `--plain` för att stänga av animationen även i en terminal.
 
 Agenten läser rotens `AGENTS.md`. Filverktygen använder relativa sökvägar och avvisar symboliska länkar. En redigering kräver en unik träff på den gamla texten. Skrivning publiceras atomärt. Skal och verifieringskommandon körs med användarens vanliga rättigheter i arbetskatalogen.
 

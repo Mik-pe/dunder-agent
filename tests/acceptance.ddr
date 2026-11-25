@@ -76,6 +76,9 @@ fn main() -> i32 {
     app := fs.realpath(sys.arg(1)).value
     dir := fs.temp_dir("dunder-loop-test-").value
     defer { _ := fs.remove_all(dir) }
+    mascot := run(app, dir, ["mascot"])
+    assert(mascot.succeeded() && mascot.stdout_text() == "Muller  ϟ ◢(•‿•)◣\n" && mascot.stderr.len == 0)
+    assert(text.contains(run(app, dir, ["--help"]).stdout_text(), "dunder-agent mascot"))
     state := path.join(dir, "state")
     cmd := process.Command::new(sys.arg(0), ["--serve", state.clone()])
     mut server := cmd.spawn().unwrap()
@@ -85,12 +88,13 @@ fn main() -> i32 {
     assert(sys.write(note, "old").is_ok())
     turn := run(app, dir, ["--check", "test \"$(cat note.txt)\" = new", "run", "repair"])
     assert(turn.succeeded())
+    assert(turn.stdout_text() == "Done.\n" && !text.contains(turn.stderr_text(), "\u{1b}"))
     assert(sys.read(note).unwrap() == "new")
     assert(text.contains(turn.stderr_text(), "check exit 0"))
     id := text.split(text.split(turn.stderr_text(), "\n")[0], " ")[1].clone()
     assert(text.contains(run(app, dir, ["--sessions"]).stdout_text(), id))
     assert(!run(app, dir, ["run", "blocked"]).succeeded())
-    assert(run(app, dir, ["--resume", id.clone(), "run", "follow up"]).stdout_text() == "Resumed.\n")
+    assert(run(app, dir, ["--resume", id.clone(), "run", "follow up", "--plain"]).stdout_text() == "Resumed.\n")
     assert(sys.write(note, "old").is_ok())
     failed := run(app, dir, ["--check", "exit 7", "run", "repair"])
     assert(!failed.succeeded() && text.contains(failed.stderr_text(), "check exit 7"))
@@ -98,6 +102,6 @@ fn main() -> i32 {
     assert(!sys.metadata(path.join(dir, "approved.txt")).ok)
     budget := run(app, dir, ["--max-steps", "2", "run", "budget"])
     assert(!budget.succeeded() && text.contains(budget.stderr_text(), "2-decision limit"))
-    print("PASS edit, automatic check, resume, failed check, shell permission, decision budget")
+    print("PASS mascot, CLI help, pipe output, edit, automatic check, resume, failed check, shell permission, decision budget")
     0
 }

@@ -5,32 +5,44 @@ import std.array as array
 import std.cmp as cmp
 import std.json as json
 import std.text as text
+import .cli
+import .mascot
 import .engine
 import .workspace
 
-pub struct Screen { run: engine.Run, input: string, scroll: i32, session_id: string }
+pub struct Screen { run: engine.Run, input: string, scroll: i32, session_id: string, elapsed: i64, motion: bool, rendered_events: i32, journal: rich.PreparedParagraph }
 
-fn draw(frame: &mut tui.Frame, s: &Screen) {
+fn draw(frame: &mut tui.Frame, s: &mut Screen) {
     (top, rest) := frame.area().rows(1)
-    frame.text(top, " Dunder Agent   " + s.run.model, tui.ink(.LightCyan).bold())
+    (head, title) := top.cols(15)
+    frame.text(head, mascot.face(cli.mood(s.run.phase), s.elapsed / 160), tui.ink(tui.rgb(0xffc965)).bold())
+    frame.text(title, "Dunder Agent   " + s.run.model, tui.ink(.LightCyan).bold())
     (content, footer) := rest.rows(cmp.max<i32>(0, rest.h - 4))
     body := frame.panel(content, " " + s.session_id + " ", tui.ink(.Cyan))
-    mut entries: []string = []
-    for e in &s.run.history.events {
-        match e.kind {
-            "user" => entries.push("› " + e.body),
-            "assistant" => entries.push(e.body.clone()),
-            "action" => { a := json.Doc::parse_text(e.body); entries.push("· " + engine.label(&a)) },
-            "result" => entries.push("  " + workspace.clip(e.body, 180)),
-            "notice" => entries.push(e.body.clone()),
-            _ => {},
+    if s.run.history.events.len == 0 {
+        mascot.landscape(&mut frame, body, s.elapsed)
+    } else {
+        if s.rendered_events != s.run.history.events.len {
+            mut entries: []string = []
+            for e in &s.run.history.events {
+                match e.kind {
+                    "user" => entries.push("› " + e.body),
+                    "assistant" => entries.push(e.body.clone()),
+                    "action" => { a := json.Doc::parse_text(e.body); entries.push("· " + engine.label(&a)) },
+                    "result" => entries.push("  " + workspace.clip(e.body, 180)),
+                    "notice" => entries.push(e.body.clone()),
+                    _ => {},
+                }
+            }
+            s.journal = rich.Paragraph::raw(engine.safe(array.join(&entries, "\n"))).wrap(.Preserve).prepare(body.w)
+            s.rendered_events = s.run.history.events.len
         }
+        s.journal.resize(body.w)
+        bottom := cmp.max<i32>(0, s.journal.height() - body.h)
+        s.scroll = cmp.min<i32>(s.scroll, bottom)
+        s.journal.set_top(bottom - s.scroll)
+        s.journal.render(&mut frame, body)
     }
-    journal := engine.safe(array.join(&entries, "\n"))
-    mut para := rich.Paragraph::raw(move journal).wrap(.Preserve).prepare(body.w)
-    bottom := cmp.max<i32>(0, para.height() - body.h)
-    para.set_top(cmp.max<i32>(0, bottom - s.scroll))
-    para.render(&mut frame, body)
     (status, entry) := footer.rows(1)
     frame.text(status, " " + engine.safe(s.run.status), tui.ink(.LightYellow))
     (input, help) := entry.rows(2)
@@ -71,12 +83,13 @@ fn update(s: &mut Screen, key: tui.Key) -> bool {
     true
 }
 
-fn tick(s: &mut Screen, _elapsed: i64) -> bool {
-    match engine.poll(&mut s.run) { .Ok(changed) => changed, .Err(e) => { engine.stop(&mut s.run, e); true }, }
+fn tick(s: &mut Screen, elapsed: i64) -> bool {
+    if s.motion { s.elapsed = elapsed }
+    match engine.poll(&mut s.run) { .Ok(changed) => changed || (s.motion && (s.run.history.events.len == 0 || s.run.phase != .Idle)), .Err(e) => { engine.stop(&mut s.run, e); true }, }
 }
 
 pub fn show(s: &mut Screen) -> Result<(), string> {
-    outcome := tui.animate(&mut s, 12, draw, update, tick)
+    outcome := tui.animate_stateful(&mut s, 10, draw, update, tick)
     engine.cancel(&mut s.run)?
     outcome
 }
