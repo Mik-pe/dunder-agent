@@ -103,6 +103,15 @@ pub fn initialize(work: string) {
     assert(cmd.exec().succeeded())
 }
 
+pub fn seed(fixture: string, work: string) -> string {
+    copy_tree(path.join(fixture, "start"), work)
+    assert(fs.symlink("../bin/check", path.join(work, "check")).ok)
+    initialize(work)
+    head := call(work, ["git", "rev-parse", "HEAD"])
+    assert(head.succeeded())
+    text.trim(head.stdout_text())
+}
+
 pub fn grade(spec: &Case, fixture: string, work: string, output: string) -> string {
     for name in &spec.protected {
         current := sys.read_text_limit(path.join(work, name), 2097152)
@@ -117,4 +126,18 @@ pub fn grade(spec: &Case, fixture: string, work: string, output: string) -> stri
     if !call(output, &spec.visible).succeeded() { return "public-tests" }
     if !call(output, &spec.hidden).succeeded() { return "holdout-tests" }
     "pass"
+}
+
+@derive(Encode, Decode)
+pub struct Trial {
+    task: string, harness: string, model: string, tree: string, trial: string,
+    version: string, executable_sha256: string, fixture_sha256: string, runner_sha256: string,
+    status: string, tree_status: string, turns_started: i32, turns_required: i32, elapsed_ms: i64, budget_ms: i64, manual_interventions: i32,
+    exit_code: i32, signal: i32,
+}
+
+pub fn fingerprint(file: string) -> string {
+    result := call(".", ["shasum", "-a", "256", file.clone()])
+    assert(result.succeeded())
+    text.split(result.stdout_text(), " ")[0].clone()
 }

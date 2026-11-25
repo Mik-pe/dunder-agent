@@ -41,9 +41,9 @@ Sessionerna sparas efter varje händelse under `$XDG_STATE_HOME/dunder-agent`, n
 
 ## Mål
 
-Dunder Agent ska lösa fler verkliga koduppgifter än **minst tre av fem** open source-harnessar. Jämförelsen ska omfatta OpenCode, Aider, Cline, Goose och Pi, med samma GLM-modell, startrevision, uppgift och tidsbudget. Kör tre gånger per uppgift på minst tolv uppgifter som omfattar felsökning, flerfilsändringar, teståterkoppling och återupptagning. Räkna en uppgift som löst när en oberoende kontroll passerar i minst två körningar. Redovisa också mediantid och antal manuella ingrepp per harness.
+Dunder Agent ska lösa fler verkliga koduppgifter än **minst tre av fem** open source-harnessar. Den låsta abonnemangsserien jämför OpenCode, Pi, Goose, Cline och Kilo Code med samma GLM-modell, startrevision, uppgift och tidsbudget. Aider reserveras för en separat körning med lämplig modellåtkomst. Kör tre gånger per uppgift på minst tolv uppgifter som omfattar felsökning, flerfilsändringar, teståterkoppling och återupptagning. Räkna en uppgift som löst när en oberoende kontroll passerar i minst två körningar. Redovisa också mediantid och antal manuella ingrepp per harness.
 
-Tolv uppgifter har verifierade startlägen och referenslösningar. De första pilotkörningarna är gjorda. Den fullständiga jämförelsen återstår. [Uppgifter, metod och pilotresultat](dogfood/README.md)
+Tolv uppgifter har verifierade startlägen och referenslösningar. De första pilotkörningarna är gjorda. Den fullständiga serien omfattar 216 försök. [Uppgifter, metod och pilotresultat](dogfood/README.md)
 
 ## Lokal verifiering
 

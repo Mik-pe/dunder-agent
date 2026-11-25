@@ -64,6 +64,24 @@ pub fn command(peer: string, app: string, work: string, dir: string, prompt: str
             cmd.add_args([prompt.clone()])
             cmd.set_env("OPENCODE_CONFIG", opencode_settings(dir))
         },
+        "kilo" => {
+            key := glm_key()
+            if key == "" { return .Err("Missing Coding Plan key.") }
+            home := path.join(dir, "kilo-home")
+            assert(fs.mkdir_all(home).ok)
+            cmd.set_env("HOME", home.clone())
+            for location in ["CONFIG", "DATA", "STATE", "CACHE"] {
+                cmd.set_env("XDG_" + location + "_HOME", path.join(home, location))
+            }
+            cfg := path.join(home, "kilo.json")
+            assert(fs.write_private_text_atomic(cfg, r#"{"share":"disabled","provider":{"zai-coding-plan":{"options":{"apiKey":"{env:ZAI_API_KEY}","baseURL":"https://api.z.ai/api/coding/paas/v4"},"models":{"glm-5.4":{"name":"GLM-5.4"}}}}}"#).is_ok())
+            cmd.set_env("KILO_CONFIG", cfg.clone())
+            cmd.set_env("OPENCODE_CONFIG", cfg.clone())
+            cmd.set_env("ZAI_API_KEY", move key)
+            cmd.add_args(["run", "--pure", "--dir", work.clone(), "--auto", "--format", "json", "--model", MODEL])
+            if resume_id != "" { cmd.add_args(["--session", resume_id.clone()]) }
+            cmd.add_args([prompt.clone()])
+        },
         "pi" => {
             key := glm_key()
             if key == "" { return .Err("No ZAI_API_KEY or OpenCode Coding Plan key available.") }
@@ -110,7 +128,7 @@ pub fn session_id(peer: string, output: &process.Output) -> string {
             if text.starts_with(line, "Session ") { return text.trim(line[8..line.len]) }
         }
     }
-    if peer == "opencode" || peer == "cline" {
+    if peer == "opencode" || peer == "cline" || peer == "kilo" {
         for line in text.split(output.stdout_text(), "\n") {
             doc := json.Doc::parse_text(line)
             id := if peer == "cline" { doc.get_str(doc.field(doc.root, "event"), "conversationId").unwrap_or_default() } else { doc.get_str(doc.root, "sessionID").unwrap_or_default() }
@@ -118,4 +136,29 @@ pub fn session_id(peer: string, output: &process.Output) -> string {
         }
     }
     ""
+}
+
+pub fn provider_unavailable(peer: string, output: &process.Output) -> bool {
+    if peer == "dunder" && !output.succeeded() {
+        for line in text.split(output.stderr_text(), "\n") {
+            for prefix in ["OpenCode HTTP 401 ", "OpenCode HTTP 403 ", "OpenCode HTTP 429 ", "OpenCode HTTP 5", "OpenCode connection failed (libcurl ", "Could not start the local OpenCode service."] {
+                if text.starts_with(line, prefix) { return true }
+            }
+        }
+    }
+    if peer == "kilo" || peer == "opencode" {
+        mut failed := false
+        for line in text.split(output.stdout_text(), "\n") {
+            doc := json.Doc::parse_text(line)
+            kind := doc.get_str(doc.root, "type").unwrap_or_default()
+            if kind == "step_finish" { failed = false }
+            if kind == "error" {
+                data := doc.field(doc.field(doc.root, "error"), "data")
+                code := doc.get_i64(data, "statusCode").unwrap_or(0)
+                failed = code == 401 || code == 403 || code == 429 || (code >= 500 && code <= 599)
+            }
+        }
+        return failed
+    }
+    false
 }

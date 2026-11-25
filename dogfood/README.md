@@ -38,7 +38,24 @@ I pilotuppgiften `limit` klarade Dunder Agent, OpenCode 2.3.2, Pi 1.6.0, Goose 1
 
 I ett separat försök med `billing-resume` klarade Dunder Agent första delens lokala kontroll. Den återupptagna sessionen redigerade rätt fil men använde en okänd strängkonvertering. Den hann inte reparera kompileringsfelet inom den gemensamma femminutersgränsen. Försöket räknas som timeout. Bedömaren ger nu agenten möjlighet att avsluta underprocesserna när tiden tar slut.
 
-Bedömaren har adapter för `dunder`, `opencode`, `pi`, `goose` och `cline`. Pi, Goose och Cline kan använda `ZAI_API_KEY` eller nyckeln i OpenCodes GLM-konfiguration. Aider saknas i leverantörens lista över tillåtna abonnemangsverktyg. En framtida jämförelse med Aider kräver separat modellåtkomst. [Z.AI:s verktygslista](https://docs.z.ai/devpack/tool/others)
+Kilo Code 7.8.32 klarade också pilotuppgiften `limit`. Bedömaren kontrollerades först mot en lokal HTTP-server med en testnyckel. För abonnemangsserien lades Kilo Code till innan första formella försöket startade. Pi, Goose, Kilo Code och Cline kan använda `ZAI_API_KEY` eller nyckeln i OpenCodes GLM-konfiguration. Aider saknas i leverantörens lista över tillåtna abonnemangsverktyg. En framtida jämförelse med Aider kräver separat modellåtkomst. [Z.AI:s verktygslista](https://docs.z.ai/devpack/tool/others)
+
+## Kör eller återuppta serien
+
+Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunder Agent enligt rotens README. Planen väljer deltagare och körbara filer. Alla deltagare körs en i taget. Varje uppgift får tre försök per deltagare och startordningen växlar.
+
+```sh
+dunder build dogfood/compare.ddr --offline --locked -o build/compare
+dunder build dogfood/series.ddr --offline --locked -o build/series
+build/series run build/measuring dogfood/plan.json
+build/series report build/measuring
+```
+
+Ange ett extra heltal efter planen för att begränsa antalet nya försök. Värdet 0 låser programversioner, kontrollsummor, startrevisioner och fixturer. Samma körkommando fortsätter där serien slutade. Varje genomfört försök har ett eget kvitto. Ett identifierat leverantörsfel pausar serien och nästa körning sparar ett nytt försök bredvid det gamla. Fel som behöver granskas ligger i rapportens `review`.
+
+Rapporten visar hur många uppgifter som klarat två av tre försök inom tidsgränsen (`solved`) och hur många som lämnat ett godkänt filträd (`tree-verified`). Den senare kolumnen ger kredit även om tiden löper ut under slutsvaret. `fully-tested` räknar uppgifter med tre poängsatta försök. Mediantiden gäller alla poängsatta försök, inklusive timeout. Rangordningen fastställs när alla uppgifter har tre bedömda försök.
+
+Flerfilsprovet `invoice` kördes en gång per deltagare i en inledande jämförelse mellan Dunder Agent 0.2.0 och OpenCode 2.3.2. Dunder läste tre filer i samma beslut, redigerade två och passerade publika och dolda tester på 145,5 sekunder. OpenCode nådde femminutersgränsen. Den äldre bedömaren sparade inget oberoende filutfall vid timeout. Dessa två försök ingår inte i den låsta serien.
 
 ## Fynd i Dunder 0.12.1
 

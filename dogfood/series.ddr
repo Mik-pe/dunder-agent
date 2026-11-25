@@ -1,0 +1,206 @@
+capability filesystem, process, stdio, unsafe
+import .corpus
+import .competitors
+import std.array as array
+import std.fs as fs
+import std.json as json
+import std.parse as parse
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+@extern("c", "flock")
+unsafe fn flock(fd: i32, operation: i32) -> i32
+
+@derive(Decode)
+struct Program { name: string, executable: string }
+
+@derive(Decode)
+struct Plan { judge: string, programs: []Program }
+
+@derive(Encode, Decode)
+struct Participant { name: string, exe: string, version: string, digest: string }
+
+@derive(Encode, Decode)
+struct Fixture { name: string, digest: string, tree: string }
+
+@derive(Encode, Decode)
+struct Campaign {
+    model: string, budget_ms: i64, repetitions: i32,
+    judge: string, judge_digest: string, programs: []Participant, fixtures: []Fixture,
+}
+
+fn resolve(name: string) -> Result<string, string> {
+    resolved := if text.contains(name, "/") { name.clone() } else { text.trim(process.run("which", [name.clone()]).stdout_text()) }
+    abs := fs.realpath(resolved)
+    if !abs.ok || !sys.metadata(abs.value).is_file { return .Err("Executable unavailable: " + name) }
+    .Ok(abs.value)
+}
+
+fn freeze(file: string) -> Result<Campaign, string> {
+    raw := sys.read_limit(file, 65536).ok().ok_or("Could not read plan.")?
+    plan := json.from_str<Plan>(raw).ok().ok_or("Expected a judge and a list of programs.")?
+    judge := resolve(plan.judge)?
+    mut programs: []Participant = []
+    mut names: []string = []
+    supported: []string = ["dunder", "opencode", "pi", "goose", "cline", "kilo"]
+    for program in &plan.programs {
+        if !array.contains(&supported, program.name) || array.contains(&names, program.name) {
+            return .Err("Invalid or duplicate harness: " + program.name)
+        }
+        exe := resolve(program.executable)?
+        identity := corpus.call(".", [exe.clone(), "--version"])
+        if !identity.succeeded() { return .Err("Could not check version: " + program.name) }
+        names.push(program.name.clone())
+        programs.push(Participant { name: program.name.clone(), exe: exe.clone(), version: text.trim(identity.stdout_text()), digest: corpus.fingerprint(exe) })
+    }
+    if programs.len == 0 { return .Err("No harnesses in plan.") }
+    temp := fs.temp_dir("series-seeds-")
+    if !temp.ok { return .Err("Could not allocate a fixture directory.") }
+    defer { _ := fs.remove_all(temp.value) }
+    mut fixtures: []Fixture = []
+    mut cases := fs.list_dir("dogfood/cases").ok().ok_or("Run from the repository root.")?
+    array.sort(&mut cases)
+    for name in &cases {
+        dir := path.join("dogfood/cases", name)
+        if sys.metadata(path.join(dir, "case.json")).is_file {
+            fixtures.push(Fixture { name: name.clone(), digest: corpus.fixture_digest(dir), tree: corpus.seed(dir, path.join(temp.value, name)) })
+        }
+    }
+    if fixtures.len == 0 { return .Err("No fixtures found.") }
+    .Ok(Campaign { model: competitors.MODEL, budget_ms: 300000, repetitions: 3, judge: judge.clone(), judge_digest: corpus.fingerprint(judge), programs: move programs, fixtures: move fixtures })
+}
+
+fn slot(root: string, fixture: &Fixture, peer: &Participant, rep: i32) -> string {
+    path.join(path.join(root, fixture.name), peer.name + "-" + rep.str())
+}
+
+fn receipt(folder: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant, rep: i32) -> Result<corpus.Trial, string> {
+    file := path.join(folder, "result.json")
+    raw := sys.read_limit(file, 32768).ok().ok_or("Missing receipt: " + file)?
+    row := json.from_str<corpus.Trial>(raw).ok().ok_or("Invalid receipt: " + file)?
+    if row.task != fixture.name || row.harness != peer.name || row.trial != rep.str() || row.model != cfg.model ||
+    row.version != peer.version || row.fixture_sha256 != fixture.digest || row.executable_sha256 != peer.digest ||
+    row.runner_sha256 != cfg.judge_digest || row.budget_ms != cfg.budget_ms || row.elapsed_ms < 0 ||
+    row.manual_interventions < 0 || row.tree != fixture.tree || row.turns_started < 1 || row.turns_required < row.turns_started { return .Err("Receipt does not match frozen configuration: " + file) }
+    .Ok(row)
+}
+
+fn attempt(base: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant, rep: i32, retry: bool) -> Result<string, string> {
+    mut folder := base.clone()
+    mut i := 0
+    while sys.metadata(path.join(folder, "result.json")).is_file {
+        row := receipt(folder, &cfg, &fixture, &peer, rep)?
+        if row.status != "provider-error" { break }
+        i += 1
+        next := path.join(base, "retry-" + i.str())
+        if !retry && !sys.metadata(path.join(next, "result.json")).is_file { break }
+        folder = move next
+    }
+    .Ok(folder)
+}
+
+fn scored(status: string) -> bool {
+    values: []string = ["pass", "timeout", "missing-final-check", "missing-first-check", "public-tests", "holdout-tests", "protected-file", "invalid-tree", "oracle-file-collision", "resume-unavailable"]
+    array.contains(&values, status)
+}
+
+fn report(cfg: &Campaign, root: string) -> Result<(), string> {
+    print("harness\tsolved\ttree-verified\tfully-tested\tscored\treview\tmissing\tmedian-ms\tmanual")
+    for peer in &cfg.programs {
+        mut solved := 0
+        mut tree_solved := 0
+        mut fully := 0
+        mut review := 0
+        mut missing := 0
+        mut manual := 0
+        mut times: []i64 = []
+        for fixture in &cfg.fixtures {
+            mut passed := 0
+            mut passing_trees := 0
+            mut decisions := 0
+            for r in 1..(cfg.repetitions + 1) {
+                folder := attempt(slot(root, &fixture, &peer, r), &cfg, &fixture, &peer, r, false)?
+                if !sys.metadata(path.join(folder, "result.json")).is_file { missing += 1; continue }
+                row := receipt(folder, &cfg, &fixture, &peer, r)?
+                if !scored(row.status) { review += 1; continue }
+                if row.tree_status == "pass" && row.turns_started == row.turns_required { passing_trees += 1 }
+                decisions += 1
+                if row.status == "pass" { passed += 1 }
+                times.push(row.elapsed_ms)
+                manual += row.manual_interventions
+            }
+            if passing_trees >= 2 { tree_solved += 1 }
+            if passed >= 2 { solved += 1 }
+            if decisions == cfg.repetitions { fully += 1 }
+        }
+        array.sort(&mut times)
+        median := if times.len == 0 { "-" } else { ((times[(times.len - 1) / 2] + times[times.len / 2]) / 2).str() }
+        print(f"{peer.name}\t{solved}\t{tree_solved}\t{fully}\t{times.len}\t{review}\t{missing}\t{median}\t{manual}")
+    }
+    .Ok
+}
+
+fn series(cfg: &Campaign, root: string, limit: i32) -> Result<(), string> {
+    mut added := 0
+    for rep in 1..(cfg.repetitions + 1) {
+        for n in 0..cfg.fixtures.len {
+            fixture := &cfg.fixtures[(n + rep - 1) % cfg.fixtures.len]
+            for i in 0..cfg.programs.len {
+                peer := &cfg.programs[(i + n + rep - 1) % cfg.programs.len]
+                folder := attempt(slot(root, &fixture, &peer, rep), &cfg, &fixture, &peer, rep, true)?
+                if !sys.metadata(path.join(folder, "result.json")).is_file {
+                    if added >= limit { return .Ok }
+                    if sys.metadata(folder).ok { return .Err("Open or interrupted attempt: " + folder) }
+                    _ := sys.eprint(f"{fixture.name} / {peer.name} / {rep}")
+                    mut trial := process.Command::new(cfg.judge.clone(), [fixture.name.clone(), peer.name.clone(), peer.exe.clone(), rep.str(), folder.clone()])
+                    trial.inherit_stdio()
+                    _ := trial.exec()
+                    added += 1
+                }
+                row := receipt(folder, &cfg, &fixture, &peer, rep)?
+                if row.status == "provider-error" { return .Err("Provider unavailable at " + folder + ". Resume to retain this receipt and retry.") }
+            }
+        }
+    }
+    .Ok
+}
+
+fn drive() -> Result<(), string> {
+    if sys.arg_count() < 3 { return .Err("series report OUT | series run OUT PLAN [MAX-NEW]") }
+    root := sys.arg(2)
+    file := path.join(root, "campaign.json")
+    if sys.arg(1) == "report" && sys.arg_count() == 3 {
+        raw := sys.read_limit(file, 1048576).ok().ok_or("Missing campaign.")?
+        cfg := json.from_str<Campaign>(raw).ok().ok_or("Invalid campaign.")?
+        return report(&cfg, root)
+    }
+    if sys.arg(1) != "run" || sys.arg_count() < 4 || sys.arg_count() > 5 { return .Err("series run OUT PLAN [MAX-NEW]") }
+    mut limit := 2147483647
+    if sys.arg_count() == 5 {
+        value := sys.arg(4)
+        parsed := parse.i64_range(value, 0, value.len)
+        if !parsed.ok || parsed.value < 0 || parsed.value > 2147483647 { return .Err("Invalid attempt count.") }
+        limit = i32(parsed.value)
+    }
+    if !fs.mkdir_all(root).ok { return .Err("Could not create results directory.") }
+    mut opts := fs.OpenOptions::read_write()
+    opts.set_create(true)
+    opts.set_mode(384)
+    mut guard := fs.File::open(path.join(root, "series.lock"), opts).ok().ok_or("Could not lock campaign.")?
+    unsafe { if flock(guard.fd(), 6) != 0 { return .Err("Campaign already running.") } }
+    cfg := freeze(sys.arg(3))?
+    encoded := json.to_string(&cfg).unwrap()
+    if sys.metadata(file).is_file {
+        if sys.read(file).ok().ok_or("Could not read campaign.")? != encoded { return .Err("Configuration changed. Use a new campaign directory.") }
+    } else {
+        if fs.write_private_text_atomic(file, encoded).is_err() { return .Err("Could not save campaign.") }
+    }
+    series(&cfg, root, limit)?
+    report(&cfg, root)
+}
+
+fn main() -> i32 {
+    match drive() { .Ok => 0, .Err(e) => { _ := sys.eprint(e); 1 }, }
+}

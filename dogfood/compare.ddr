@@ -8,20 +8,6 @@ import std.text as text
 import std.time as clock
 import sys
 
-@derive(Encode)
-struct Trial {
-    task: string, harness: string, model: string, tree: string, trial: string,
-    version: string, executable_sha256: string, fixture_sha256: string, runner_sha256: string,
-    status: string, elapsed_ms: i64, budget_ms: i64, manual_interventions: i32,
-    exit_code: i32, signal: i32,
-}
-
-fn fingerprint(file: string) -> string {
-    result := corpus.call(".", ["shasum", "-a", "256", file.clone()])
-    assert(result.succeeded())
-    text.split(result.stdout_text(), " ")[0].clone()
-}
-
 fn main() -> i32 {
     if path.basename(sys.arg(0)) == "check" { return corpus.check_workspace() }
     if sys.arg_count() != 6 {
@@ -40,13 +26,12 @@ fn main() -> i32 {
     temp := fs.temp_dir("harness-trial-").value
     defer { _ := fs.remove_all(temp) }
     work := path.join(temp, "work")
-    corpus.copy_tree(path.join(fixture, "start"), work)
     assert(fs.mkdir_all(path.join(temp, "bin")).ok)
-    assert(fs.symlink(fs.realpath(sys.arg(0)).value, path.join(temp, "bin/check")).ok)
-    assert(fs.symlink("../bin/check", path.join(work, "check")).ok)
+    checker := path.join(temp, "bin/check")
+    assert(sys.write_bytes(checker, &sys.read_bytes(fs.realpath(sys.arg(0)).value).unwrap()).is_ok())
+    assert(fs.chmod(checker, 493).is_ok())
     assert(sys.write(path.join(temp, "visible.json"), json.to_string(&spec.visible).unwrap()).is_ok())
-    corpus.initialize(work)
-    tree := corpus.call(work, ["git", "rev-parse", "HEAD"]).stdout_text()
+    tree := corpus.seed(fixture, work)
     if peer == "reference" {
         if corpus.call(work, &spec.visible).succeeded() { _ := sys.eprint("Seed unexpectedly passes."); return 1 }
         if !corpus.check_command(work, ["git", "apply", path.join(fixture, "reference.patch")]) { return 1 }
@@ -58,9 +43,10 @@ fn main() -> i32 {
     version_call := corpus.call(work, [app.value.clone(), "--version"])
     if !version_call.succeeded() { _ := sys.eprint("Could not identify harness version."); return 2 }
     version := text.trim(version_call.stdout_text())
-    executable_digest := fingerprint(app.value)
-    runner_digest := fingerprint(fs.realpath(sys.arg(0)).value)
+    executable_digest := corpus.fingerprint(app.value)
+    runner_digest := corpus.fingerprint(fs.realpath(sys.arg(0)).value)
     fixture_digest := corpus.fixture_digest(fixture)
+    mut turns := 0
     mut id := ""
     mut status := "pass"
     mut code := 0
@@ -73,6 +59,7 @@ fn main() -> i32 {
         cmd := match competitors.command(peer, app.value, work, temp, prompt, id, budget - elapsed) {
             .Ok(c) => c, .Err(e) => { _ := sys.eprint(e); return 2 },
         }
+        turns += 1
         start := clock.monotonic_ms()
         output := cmd.exec()
         elapsed += clock.monotonic_ms() - start
@@ -82,6 +69,7 @@ fn main() -> i32 {
         assert(fs.write_private_atomic(path.join(out, log + ".stdout"), &output.stdout).is_ok())
         assert(fs.write_private_atomic(path.join(out, log + ".stderr"), &output.stderr).is_ok())
         if output.timed_out || elapsed >= budget { status = "timeout"; break }
+        if competitors.provider_unavailable(peer, &output) { status = "provider-error"; break }
         if !output.succeeded() { status = "harness-error"; break }
         if id == "" && spec.followup != "" {
             digest := corpus.snapshot(work, "").unwrap()
@@ -91,8 +79,9 @@ fn main() -> i32 {
             if id == "" { status = "resume-unavailable"; break }
         }
     }
-    if status == "pass" { status = corpus.grade(&spec, fixture, work, path.join(temp, "oracle")) }
-    row := Trial { task: sys.arg(1), harness: peer.clone(), model: competitors.MODEL, version: version.clone(), executable_sha256: executable_digest.clone(), fixture_sha256: fixture_digest.clone(), runner_sha256: runner_digest.clone(), tree: text.trim(tree), trial: sys.arg(4), status: status.clone(), elapsed_ms: elapsed, budget_ms: budget, manual_interventions: 0, exit_code: code, signal: sig }
+    tree_status := corpus.grade(&spec, fixture, work, path.join(temp, "oracle"))
+    if status == "pass" { status = tree_status.clone() }
+    row := corpus.Trial { task: sys.arg(1), harness: peer.clone(), model: competitors.MODEL, version: version.clone(), executable_sha256: executable_digest.clone(), fixture_sha256: fixture_digest.clone(), runner_sha256: runner_digest.clone(), tree: text.trim(tree), trial: sys.arg(4), status: status.clone(), tree_status: tree_status.clone(), turns_started: turns, turns_required: if spec.followup == "" { 1 } else { 2 }, elapsed_ms: elapsed, budget_ms: budget, manual_interventions: 0, exit_code: code, signal: sig }
     encoded := json.to_string(&row).unwrap()
     assert(fs.write_private_text_atomic(path.join(out, "result.json"), encoded + "\n").is_ok())
     print(encoded)

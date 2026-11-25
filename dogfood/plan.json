@@ -1,0 +1,11 @@
+{
+  "judge": "build/compare",
+  "programs": [
+    {"name": "dunder", "executable": "build/dunder-agent"},
+    {"name": "opencode", "executable": "opencode"},
+    {"name": "pi", "executable": "pi"},
+    {"name": "goose", "executable": "goose"},
+    {"name": "cline", "executable": "cline"},
+    {"name": "kilo", "executable": "kilo"}
+  ]
+}

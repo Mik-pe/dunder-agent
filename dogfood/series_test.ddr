@@ -1,0 +1,85 @@
+capability filesystem, process, stdio
+import .corpus
+import .competitors
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+fn fake_trial() -> i32 {
+    name := sys.arg(1)
+    rep := sys.arg(4)
+    out := sys.arg(5)
+    assert(fs.mkdir_all(out).ok)
+    fixture := path.join("dogfood/cases", name)
+    work := fs.temp_dir("series-fake-").value
+    defer { _ := fs.remove_all(work) }
+    tree := corpus.seed(fixture, path.join(work, "work"))
+    retry := path.basename(out) == "retry-1"
+    reason := if name == "a" && rep == "1" && !retry { "provider-error" } else if name == "a" && rep == "2" { "timeout" } else if name == "a" && rep == "3" { "holdout-tests" } else { "pass" }
+    digest := corpus.fingerprint(sys.arg(0))
+    row := corpus.Trial {
+        task: name.clone(), harness: "dunder", trial: rep.clone(), model: competitors.MODEL, tree: tree.clone(),
+        version: "fixture 1", fixture_sha256: corpus.fixture_digest(fixture), runner_sha256: digest.clone(), executable_sha256: digest.clone(),
+        status: reason.clone(), tree_status: if reason == "timeout" { "pass" } else { reason.clone() }, turns_started: 1, turns_required: 1,
+        budget_ms: 300000, elapsed_ms: if rep == "1" { i64(1000) } else if rep == "2" { i64(2000) } else { i64(3000) },
+        manual_interventions: 0, exit_code: if reason == "timeout" { 124 } else { 0 }, signal: 0,
+    }
+    assert(fs.write_private_text_atomic(path.join(out, "result.json"), json.to_string(&row).unwrap()).is_ok())
+    if reason == "pass" { 0 } else { 1 }
+}
+
+fn run(exe: string, cwd: string, args: []string) -> process.Output {
+    mut cmd := process.Command::new(exe.clone(), args.clone())
+    cmd.set_cwd(cwd.clone())
+    cmd.set_timeout(30000)
+    cmd.exec()
+}
+
+fn output_sample(stdout: string, stderr: string, code: i32) -> process.Output {
+    mut cmd := process.Command::new("/bin/sh", ["-c", r#"printf '%s\n' "$1"; printf '%s\n' "$2" >&2; exit "$3""#, "probe", stdout.clone(), stderr.clone(), code.str()])
+    cmd.exec()
+}
+
+fn main() -> i32 {
+    if sys.arg_count() == 6 { return fake_trial() }
+    if sys.arg_count() == 2 && sys.arg(1) == "--version" { print("fixture 1"); return 0 }
+    if sys.arg_count() != 2 { return 2 }
+    app := fs.realpath(sys.arg(1)).value
+    self_binary := fs.realpath(sys.arg(0)).value
+    dir := fs.temp_dir("dunder-series-test-").value
+    defer { _ := fs.remove_all(dir) }
+    for name in ["a", "b"] {
+        base := path.join(path.join(dir, "dogfood/cases"), name)
+        assert(fs.mkdir_all(path.join(base, "start")).ok)
+        assert(sys.write(path.join(base, "case.json"), "{}").is_ok())
+        assert(sys.write(path.join(base, "start/file"), name.clone()).is_ok())
+    }
+    plan := r#"{"judge":"# + json.quote(self_binary) + r#","programs":[{"name":"dunder","executable":"# + json.quote(self_binary) + "}]}"
+    assert(sys.write(path.join(dir, "plan.json"), plan).is_ok())
+    args: []string = ["run", "report-dir", "plan.json"]
+    seed := run(app, dir, ["run", "report-dir", "plan.json", "0"])
+    assert(seed.succeeded() && text.contains(seed.stdout_text(), "dunder\t0\t0\t0\t0\t0\t6\t-\t0"))
+    first := run(app, dir, args.clone())
+    assert(!first.succeeded() && text.contains(first.stderr_text(), "Provider unavailable"))
+    initial := path.join(dir, "report-dir/a/dunder-1/result.json")
+    before := sys.read(initial).unwrap()
+    finished := run(app, dir, args.clone())
+    assert(finished.succeeded() && text.contains(finished.stdout_text(), "dunder\t1\t2\t2\t6\t0\t0\t2000\t0"))
+    assert(sys.read(initial).unwrap() == before)
+    assert(sys.metadata(path.join(dir, "report-dir/a/dunder-1/retry-1/result.json")).is_file)
+    again := run(app, dir, args.clone())
+    assert(again.succeeded() && again.stderr.len == 0)
+    assert(sys.write(path.join(dir, "dogfood/cases/b/start/file"), "changed").is_ok())
+    assert(!run(app, dir, args.clone()).succeeded())
+    assert(sys.write(initial, text.replace(before, "fixture 1", "foreign version")).is_ok())
+    assert(!run(app, dir, ["report", "report-dir"]).succeeded())
+    err := r#"{"type":"error","error":{"data":{"statusCode":429}}}"#
+    assert(competitors.provider_unavailable("kilo", &output_sample(err, "", 0)))
+    assert(!competitors.provider_unavailable("opencode", &output_sample(err + "\n" + r#"{"type":"step_finish"}"#, "", 0)))
+    assert(competitors.provider_unavailable("dunder", &output_sample("", "OpenCode HTTP 503 (service): unavailable", 1)))
+    print("PASS frozen fixtures, immutable retries, three repetitions, median, independent tree grading, mismatched receipts, provider errors")
+    0
+}
