@@ -3,6 +3,7 @@ import .corpus
 import .competitors
 import .quota as quota_time
 import std.time as clock
+import std.array as array
 import std.fs as fs
 import std.json as json
 import std.path as path
@@ -58,12 +59,141 @@ fn output_sample(stdout: string, stderr: string, code: i32) -> process.Output {
     cmd.exec()
 }
 
+fn check_candidate_verdict(app: string, dir: string, judge: string, campaign: &json.Doc) {
+    candidate := path.join(dir, "candidate")
+    assert(sys.write(candidate, "#!/bin/sh\nprintf 'fixture candidate\\n'\n").is_ok() && fs.chmod(candidate, 493).is_ok())
+    plan := r#"{"judge":"# + json.quote(judge) + r#","programs":[{"name":"dunder","executable":"# + json.quote(candidate) + "}]}"
+    assert(sys.write(path.join(dir, "candidate.json"), plan).is_ok())
+    assert(run(app, dir, ["run", "new", "candidate.json", "0"]).succeeded())
+    args: []string = ["verdict", "out", "new"]
+    empty := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+    assert(empty.get_str(empty.root, "candidate").unwrap() == "fixture candidate" && empty.get_i64(empty.root, "scored").unwrap() == 180)
+    assert(empty.get_str(empty.root, "status").unwrap() == "pending" && empty.get_i64(empty.root, "missing").unwrap() == 36)
+    digest := corpus.fingerprint(candidate)
+    tasks := campaign.field(campaign.root, "fixtures")
+    for i in 0..campaign.count(tasks) {
+        name := campaign.get_str(campaign.at(tasks, i), "name").unwrap()
+        for rep in 1..4 {
+            slot := name + "/dunder-" + rep.str()
+            old := path.join(path.join(dir, "out"), slot)
+            new := path.join(path.join(dir, "new"), slot)
+            mut row := json.from_str<corpus.Trial>(sys.read(path.join(old, "result.json")).unwrap()).unwrap()
+            assert(fs.mkdir_all(new).ok)
+            file := path.join(new, "result.json")
+            if i == 0 && rep == 1 {
+                assert(sys.write(file, json.to_string(&row).unwrap()).is_ok())
+                assert(!run(app, dir, args.clone()).succeeded())
+            }
+            row.version = "fixture candidate"; row.executable_sha256 = digest.clone()
+            row.status = "timeout"; row.elapsed_ms = 300001; row.exit_code = 124
+            assert(sys.write(file, json.to_string(&row).unwrap()).is_ok())
+        }
+    }
+    done := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+    assert(done.get_str(done.root, "status").unwrap() == "not-met" && done.get_i64(done.root, "wins").unwrap() == 0 && done.get_i64(done.root, "scored").unwrap() == 216)
+    file := path.join(dir, "new/campaign.json")
+    raw := sys.read(file).unwrap()
+    for bad in [text.replace(raw, competitors.MODEL, "another/model"), text.replace(raw, "300000", "500000"),
+        text.replace(raw, r#""repetitions":3"#, r#""repetitions":2"#), text.replace(raw, "task-0", "other-task"),
+        text.replace(raw, campaign.get_str(campaign.root, "judge_digest").unwrap(), "other-judge")] {
+        assert(sys.write(file, bad).is_ok() && !run(app, dir, args.clone()).succeeded())
+    }
+}
+
+fn check_verdict(app: string, exe: string) {
+    dir := fs.temp_dir("dunder-verdict-").value
+    defer { _ := fs.remove_all(dir) }
+    peers: []string = ["dunder", "opencode", "pi", "goose", "cline", "kilo"]
+    scores: []i32 = [8, 7, 6, 3, 8, 10]
+    mut programs: []string = []
+    for peer in &peers {
+        programs.push(r#"{"name":"# + json.quote(peer) + r#","executable":"# + json.quote(exe) + "}")
+    }
+    plan := r#"{"judge":"# + json.quote(exe) + r#","programs":["# + array.join(&programs, ",") + "]}"
+    assert(sys.write(path.join(dir, "plan.json"), plan).is_ok())
+    for i in 0..12 {
+        base := path.join(dir, "dogfood/cases/task-" + i.str())
+        assert(fs.mkdir_all(path.join(base, "start")).ok)
+        assert(sys.write(path.join(base, "case.json"), "{}").is_ok())
+        assert(sys.write(path.join(base, "start/file"), i.str()).is_ok())
+    }
+    assert(run(app, dir, ["run", "out", "plan.json", "0"]).succeeded())
+    args: []string = ["verdict", "out"]
+    empty := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+    assert(empty.get_str(empty.root, "status").unwrap() == "pending" && empty.get_i64(empty.root, "missing").unwrap() == 216)
+    root := path.join(dir, "out")
+    campaign := json.Doc::parse_text(sys.read(path.join(root, "campaign.json")).unwrap())
+    fixtures := campaign.field(campaign.root, "fixtures")
+    digest := campaign.get_str(campaign.root, "judge_digest").unwrap()
+    mut tie_file := ""
+    mut tied := ""
+    mut late_file := ""
+    mut late := ""
+    for i in 0..12 {
+        fixture := campaign.at(fixtures, i)
+        name := campaign.get_str(fixture, "name").unwrap()
+        for j in 0..peers.len {
+            for rep in 1..4 {
+                pass := rep == 1 || rep == 2 && i < scores[j]
+                mut row := corpus.Trial { task: name.clone(), harness: peers[j].clone(), trial: rep.str(), model: competitors.MODEL,
+                    tree: campaign.get_str(fixture, "tree").unwrap(), version: "fixture 1", fixture_sha256: campaign.get_str(fixture, "digest").unwrap(),
+                    runner_sha256: digest.clone(), executable_sha256: digest.clone(), status: if pass { "pass" } else { "timeout" }, tree_status: "pass",
+                    turns_started: 2, turns_required: 2, budget_ms: 300000, elapsed_ms: if pass { i64(1000) } else { i64(300001) },
+                    manual_interventions: 0, exit_code: if pass { 0 } else { 124 }, signal: 0 }
+                folder := path.join(path.join(root, name), peers[j] + "-" + rep.str())
+                assert(fs.mkdir_all(folder).ok)
+                file := path.join(folder, "result.json")
+                raw := json.to_string(&row).unwrap()
+                if j == 0 && i == 11 && rep == 1 { late_file = file.clone(); late = raw.clone(); continue }
+                assert(sys.write(file, raw).is_ok())
+                if j == 1 && i == 7 && rep == 2 {
+                    tie_file = file.clone()
+                    row.status = "pass"; row.elapsed_ms = 1000; row.exit_code = 0
+                    tied = json.to_string(&row).unwrap()
+                }
+            }
+        }
+    }
+    pending := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+    assert(pending.get_i64(pending.root, "scored").unwrap() == 215 && pending.get_str(pending.root, "status").unwrap() == "pending")
+    assert(pending.kind(pending.field(pending.root, "wins")) == .Null && pending.count(pending.field(pending.root, "standings")) == 0)
+    assert(sys.write(late_file, late).is_ok())
+    met := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+    assert(met.get_str(met.root, "status").unwrap() == "met" && met.get_i64(met.root, "wins").unwrap() == 3)
+    ranks := met.field(met.root, "standings")
+    for i in 0..peers.len { assert(met.get_i64(met.at(ranks, i), "solved").unwrap() == i64(scores[i])) }
+    check_candidate_verdict(app, dir, exe, &campaign)
+    assert(sys.write(tie_file, tied).is_ok())
+    missed := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+    assert(missed.get_str(missed.root, "status").unwrap() == "not-met" && missed.get_i64(missed.root, "wins").unwrap() == 2)
+    for bad in [text.replace(tied, r#""tree_status":"pass""#, r#""tree_status":"holdout-tests""#),
+        text.replace(tied, r#""turns_started":2"#, r#""turns_started":1"#), text.replace(tied, r#""elapsed_ms":1000"#, r#""elapsed_ms":300000"#),
+        text.replace(tied, r#""exit_code":0"#, r#""exit_code":1"#), text.replace(tied, r#""signal":0"#, r#""signal":9"#)] {
+        assert(sys.write(tie_file, bad).is_ok() && !run(app, dir, args.clone()).succeeded())
+    }
+    for reason in ["harness-error", "provider-error"] {
+        assert(sys.write(tie_file, text.replace(tied, r#""status":"pass""#, r#""status":"# + json.quote(reason))).is_ok())
+        open := json.Doc::parse_text(run(app, dir, args.clone()).stdout_text())
+        field := if reason == "provider-error" { "provider" } else { "review" }
+        assert(open.get_str(open.root, "status").unwrap() == "pending" && open.get_i64(open.root, field).unwrap() == 1)
+    }
+    assert(sys.write(tie_file, tied).is_ok())
+    manifest := path.join(root, "campaign.json")
+    raw := sys.read(manifest).unwrap()
+    first := campaign.get_str(campaign.at(fixtures, 0), "digest").unwrap()
+    second := campaign.get_str(campaign.at(fixtures, 1), "digest").unwrap()
+    assert(sys.write(manifest, text.replace(raw, first, second)).is_ok())
+    duplicate := run(app, dir, args.clone())
+    assert(!duplicate.succeeded() && text.contains(duplicate.stderr_text(), "Repeated task"))
+}
+
 fn main() -> i32 {
     if sys.arg_count() == 6 { return fake_trial() }
     if sys.arg_count() == 2 && sys.arg(1) == "--version" { print("fixture 1"); return 0 }
     if sys.arg_count() != 2 { return 2 }
     app := fs.realpath(sys.arg(1)).value
     self_binary := fs.realpath(sys.arg(0)).value
+    check_verdict(app, self_binary)
     dir := fs.temp_dir("dunder-series-test-").value
     defer { _ := fs.remove_all(dir) }
     for name in ["a", "b"] {
@@ -77,6 +207,7 @@ fn main() -> i32 {
     args: []string = ["run", "report-dir", "plan.json"]
     seed := run(app, dir, ["run", "report-dir", "plan.json", "0"])
     assert(seed.succeeded() && text.contains(seed.stdout_text(), "dunder\t0\t0\t0\t0\t0\t6\t-\t0"))
+    assert(!run(app, dir, ["verdict", "report-dir"]).succeeded())
     first := run(app, dir, args.clone())
     assert(!first.succeeded() && text.contains(first.stderr_text(), "Provider unavailable"))
     initial := path.join(dir, "report-dir/a/dunder-1/result.json")
@@ -151,6 +282,6 @@ fn main() -> i32 {
     assert(competitors.dunder_failure("OpenCode exceeded its 1 MiB output limit.") == "model-limit")
     assert(!competitors.provider_unavailable("dunder", &output_sample("", "OpenCode connection failed (libcurl 28).", 1)))
     assert(competitors.provider_unavailable("dunder", &output_sample("", "OpenCode HTTP 503 (service): unavailable", 1)))
-    print("PASS frozen fixtures, immutable retries, three repetitions, median, independent tree grading, mismatched receipts, provider errors, quota wait and retry")
+    print("PASS frozen fixtures, immutable retries, three repetitions, median, complete goal verdict and strict ties, independent tree grading, mismatched receipts, provider errors, quota wait and retry")
     0
 }

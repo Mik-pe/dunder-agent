@@ -83,6 +83,10 @@ Första varvet på `billing-resume` är bedömt för alla sex. Pi och Goose klar
 
 På CSV-uppgiften klarade Dunder Agent 0.5.0 sitt första försök på 150,4 sekunder och OpenCode nådde tidsgränsen. Sedan tog abonnemangets femtimmarskvot slut. Pi returnerade processkod 0 trots att modellens slutmeddelande innehöll HTTP 429 och leverantörskod 1308. Goose returnerade processkod 1 med samma leverantörskod i sin avslutande felhändelse. Bedömaren läser nu dessa slutmeddelanden så att kvotstopp ger nya försök för båda. Sparade kvitton och filträdens bedömningar behålls. Kilo Codes kvotstopp identifierades redan av dess adapter.
 
+Efter kvotåterställningen klarade även Pi, Kilo och Cline sina första CSV-försök. Goose lämnade ett godkänt filträd när tiden gick ut. I det första försöket med den asynkrona cachen (`inflight`) klarade Pi, Dunder Agent, Goose och OpenCode uppgiften på 102,9, 149,2, 190,4 respektive 193,0 sekunder. Cline och Kilo nådde femminutersgränsen.
+
+Alla tre av Dunders inlämningar kunde byggas upp igen genom att spela upp sessionens bekräftade filändringar från den låsta startrevisionen. CSV- och cachereparationerna klarade både publika och dolda tester på nytt. I `billing-resume` återkom ändringen i det skyddade testet och båda testkommandona gav felkod.
+
 ## Kör eller återuppta serien
 
 Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunder Agent enligt rotens README. Planen väljer deltagare och körbara filer. Alla deltagare körs en i taget. Varje uppgift får tre försök per deltagare och startordningen växlar.
@@ -93,6 +97,7 @@ dunder build dogfood/series.ddr --offline --locked -o build/series
 dunder run dogfood/series_test.ddr --offline --locked -- build/series
 build/series run build/measuring dogfood/plan.json
 build/series report build/measuring
+build/series verdict build/measuring
 ```
 
 Ange ett extra heltal efter planen för att begränsa antalet nya försök. Värdet 0 låser programversioner, kontrollsummor, startrevisioner och fixturer. Samma körkommando fortsätter där serien slutade. Varje genomfört försök har ett eget kvitto. Ett identifierat leverantörsfel pausar serien och nästa körning sparar ett nytt försök bredvid det gamla. En timeout i harnessens egen HTTP-klient, en uppnådd beslutsgräns eller ett blockerat uppdrag räknas som ett misslyckat försök. Bedömaren känner igen dessa slutorsaker även i äldre kvitton via den sparade felutskriften. Kända leverantörsfel visas i rapportens `provider` tills försöket har körts om. Andra obedömda utfall visas i `review`.
@@ -101,9 +106,25 @@ För att låta serien fortsätta själv efter abonnemangets kvotstopp kör du `b
 
 Rapporten visar hur många uppgifter som klarat två av tre försök inom tidsgränsen (`solved`) och hur många som lämnat ett godkänt filträd (`tree-verified`). Den senare kolumnen ger kredit även om tiden löper ut under slutsvaret. `fully-tested` räknar uppgifter med tre poängsatta försök. Mediantiden gäller alla poängsatta försök, inklusive timeout. Rangordningen fastställs när alla uppgifter har tre bedömda försök.
 
+`verdict` skriver JSON med kandidatens version och antal poängsatta, saknade och obedömda försök. Status är `pending` tills hela underlaget finns. En färdig serie får `met` om Dunder löst fler uppgifter än minst tre av de fem namngivna motståndarna. Annars blir status `not-met`. Vid lika antal lösta uppgifter får ingen av deltagarna en vinst över den andra. Ett motsägande kvitto, till exempel ett godkänt försök efter tidsgränsen, ger felkod.
+
 Flerfilsprovet `invoice` kördes en gång per deltagare i en inledande jämförelse mellan Dunder Agent 0.2.0 och OpenCode 2.3.2. Dunder läste tre filer i samma beslut, redigerade två och passerade publika och dolda tester på 145,5 sekunder. OpenCode nådde femminutersgränsen. Den äldre bedömaren sparade inget oberoende filutfall vid timeout. Dessa två försök ingår inte i den låsta serien.
 
 I ett lokalt återspel av samma fakturauppgift användes de läsningar, ersättningstexter och det slutsvar som GLM faktiskt gav i pilotkörningen. Med en redigering per beslut krävdes fyra modellsvar. Med de två redigeringarna samlade i ett beslut behövdes tre. Båda körningarna passerade samma publika och dolda tester. Svaren spelades upp från en lokal server. Mätningen avser antalet beslut.
+
+### Bedöm en ny version mot samma motståndare
+
+En ny Dunder-version behöver 36 egna försök för de tolv uppgifterna. Ange baslinjens bedömare och en låst kopia av den nya binären. Kör kampanjerna i följd på samma maskin. Följande exempel utgår från baslinjen ovan.
+
+```sh
+cp build/dunder-agent build/dunder-agent-candidate
+jq --arg exe "$PWD/build/dunder-agent-candidate" '{judge, programs: [{name: "dunder", executable: $exe}]}' build/measuring/campaign.json > build/candidate-plan.json
+build/series run build/candidate build/candidate-plan.json 0
+build/series watch build/candidate build/candidate-plan.json +08:00
+build/series verdict build/measuring build/candidate
+```
+
+Sista kommandot använder kandidatens samtliga Dunder-försök och baslinjens samtliga motståndarförsök. Det kräver samma modell, tidsgräns, antal upprepningar, bedömarbinär, fixturer och startrevisioner. Den 25 november låstes 0.10.0 för en sådan körning efter 0.5.0-serien. Båda använder harnessarnas standardkonfiguration med GLM Coding Plan. Dunder-skillen som ingår i 0.10.0 är därmed en del av den versionen.
 
 ## Fynd i Dunder 0.12.1
 
@@ -120,3 +141,15 @@ fn main() { assert(convert(.Ok).is_ok()) }
 ```
 
 Kompilatorn rapporterar att varianten `.Ok` saknar payload. Filverktygen matchar tills vidare explicit på `.Ok` och `.Err`.
+
+Vid JSON-kodning av slutresultatet gav `@derive(Encode)` fel E3099 på ett läst arrayfält. Följande program reproducerar felet med 0.12.1. Med `@derive(Encode, Decode)` kompilerar det och skriver `{"numbers":[3,8]}`.
+
+```dunder
+import std.json as json
+@derive(Encode)
+struct Row { numbers: []i32 }
+fn main() {
+    row := Row { numbers: [3, 8] }
+    print(json.to_string(&row).unwrap())
+}
+```

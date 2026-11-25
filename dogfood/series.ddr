@@ -34,6 +34,11 @@ struct Campaign {
     judge: string, judge_digest: string, programs: []Participant, fixtures: []Fixture,
 }
 
+const REQUIRED_WINS: i32 = 3
+const BUDGET_MS: i64 = 300000
+
+fn harnesses() -> []string { ["dunder", "opencode", "pi", "goose", "cline", "kilo"] }
+
 fn resolve(name: string) -> Result<string, string> {
     resolved := if text.contains(name, "/") { name.clone() } else { text.trim(process.run("which", [name.clone()]).stdout_text()) }
     abs := fs.realpath(resolved)
@@ -47,7 +52,7 @@ fn freeze(file: string) -> Result<Campaign, string> {
     judge := resolve(plan.judge)?
     mut programs: []Participant = []
     mut names: []string = []
-    supported: []string = ["dunder", "opencode", "pi", "goose", "cline", "kilo"]
+    supported := harnesses()
     for program in &plan.programs {
         if !array.contains(&supported, program.name) || array.contains(&names, program.name) {
             return .Err("Invalid or duplicate harness: " + program.name)
@@ -72,7 +77,7 @@ fn freeze(file: string) -> Result<Campaign, string> {
         }
     }
     if fixtures.len == 0 { return .Err("No fixtures found.") }
-    .Ok(Campaign { model: competitors.MODEL, budget_ms: 300000, repetitions: 3, judge: judge.clone(), judge_digest: corpus.fingerprint(judge), programs: move programs, fixtures: move fixtures })
+    .Ok(Campaign { model: competitors.MODEL, budget_ms: BUDGET_MS, repetitions: 3, judge: judge.clone(), judge_digest: corpus.fingerprint(judge), programs: move programs, fixtures: move fixtures })
 }
 
 fn slot(root: string, fixture: &Fixture, peer: &Participant, rep: i32) -> string {
@@ -98,6 +103,10 @@ fn receipt(folder: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant
         stdout := sys.read_text_limit(path.join(folder, "turn-" + row.turns_started.str() + ".stdout"), 67108864)
         if stdout.ok && quota.message(row.harness, stdout.value, row.exit_code) != "" { row.status = "provider-error" }
     }
+    if row.status == "pass" && (row.tree_status != "pass" || row.turns_started != row.turns_required ||
+    row.elapsed_ms >= row.budget_ms || row.exit_code != 0 || row.signal != 0) {
+        return .Err("Passing receipt contradicts its check, completion or deadline: " + file)
+    }
     .Ok(row)
 }
 
@@ -120,41 +129,105 @@ fn scored(status: string) -> bool {
     array.contains(&values, status)
 }
 
+struct Score {
+    solved: i32, trees: i32, fully: i32, scored: i32, review: i32, missing: i32,
+    provider: i32, manual: i32, median: string,
+}
+
+fn score(cfg: &Campaign, root: string, peer: &Participant) -> Result<Score, string> {
+    mut solved := 0
+    mut tree_solved := 0
+    mut fully := 0
+    mut review := 0
+    mut provider := 0
+    mut missing := 0
+    mut manual := 0
+    mut times: []i64 = []
+    for fixture in &cfg.fixtures {
+        mut passed := 0
+        mut passing_trees := 0
+        mut decisions := 0
+        for r in 1..(cfg.repetitions + 1) {
+            folder := attempt(slot(root, &fixture, &peer, r), &cfg, &fixture, &peer, r, false)?
+            if !sys.metadata(path.join(folder, "result.json")).is_file { missing += 1; continue }
+            row := receipt(folder, &cfg, &fixture, &peer, r)?
+            if row.status == "provider-error" { provider += 1; continue }
+            if !scored(row.status) { review += 1; continue }
+            if row.tree_status == "pass" && row.turns_started == row.turns_required { passing_trees += 1 }
+            decisions += 1
+            if row.status == "pass" { passed += 1 }
+            times.push(row.elapsed_ms)
+            manual += row.manual_interventions
+        }
+        if passing_trees >= 2 { tree_solved += 1 }
+        if passed >= 2 { solved += 1 }
+        if decisions == cfg.repetitions { fully += 1 }
+    }
+    array.sort(&mut times)
+    mut median := "-"
+    if times.len > 0 {
+        lower := times[(times.len - 1) / 2]
+        median = (lower + (times[times.len / 2] - lower) / 2).str()
+    }
+    .Ok(Score { solved: solved, trees: tree_solved, fully: fully, scored: times.len, review: review, missing: missing, provider: provider, manual: manual, median: move median })
+}
+
 fn report(cfg: &Campaign, root: string) -> Result<(), string> {
     print("harness\tsolved\ttree-verified\tfully-tested\tscored\treview\tmissing\tmedian-ms\tmanual\tprovider")
     for peer in &cfg.programs {
-        mut solved := 0
-        mut tree_solved := 0
-        mut fully := 0
-        mut review := 0
-        mut provider := 0
-        mut missing := 0
-        mut manual := 0
-        mut times: []i64 = []
-        for fixture in &cfg.fixtures {
-            mut passed := 0
-            mut passing_trees := 0
-            mut decisions := 0
-            for r in 1..(cfg.repetitions + 1) {
-                folder := attempt(slot(root, &fixture, &peer, r), &cfg, &fixture, &peer, r, false)?
-                if !sys.metadata(path.join(folder, "result.json")).is_file { missing += 1; continue }
-                row := receipt(folder, &cfg, &fixture, &peer, r)?
-                if row.status == "provider-error" { provider += 1; continue }
-                if !scored(row.status) { review += 1; continue }
-                if row.tree_status == "pass" && row.turns_started == row.turns_required { passing_trees += 1 }
-                decisions += 1
-                if row.status == "pass" { passed += 1 }
-                times.push(row.elapsed_ms)
-                manual += row.manual_interventions
-            }
-            if passing_trees >= 2 { tree_solved += 1 }
-            if passed >= 2 { solved += 1 }
-            if decisions == cfg.repetitions { fully += 1 }
-        }
-        array.sort(&mut times)
-        median := if times.len == 0 { "-" } else { ((times[(times.len - 1) / 2] + times[times.len / 2]) / 2).str() }
-        print(f"{peer.name}\t{solved}\t{tree_solved}\t{fully}\t{times.len}\t{review}\t{missing}\t{median}\t{manual}\t{provider}")
+        s := score(&cfg, root, &peer)?
+        print(f"{peer.name}\t{s.solved}\t{s.trees}\t{s.fully}\t{s.scored}\t{s.review}\t{s.missing}\t{s.median}\t{s.manual}\t{s.provider}")
     }
+    .Ok
+}
+
+@derive(Encode, Decode)
+struct Standing { harness: string, version: string, solved: i32 }
+
+@derive(Encode, Decode)
+struct Verdict {
+    status: string, candidate: string, model: string, tasks: i32, total: i32,
+    scored: i32, missing: i32, review: i32, provider: i32, required_wins: i32,
+    wins: Option<i32>, standings: []Standing,
+}
+
+fn verdict(cfg: &Campaign, root: string, candidate_root: string) -> Result<(), string> {
+    if cfg.model != competitors.MODEL || cfg.budget_ms != BUDGET_MS { return .Err("The goal requires " + competitors.MODEL + " and a five-minute deadline.") }
+    mut names: []string = []
+    for p in &cfg.programs { names.push(p.name.clone()) }
+    mut expected := harnesses()
+    array.sort(&mut expected)
+    array.sort(&mut names)
+    if names != expected { return .Err("The goal requires Dunder, OpenCode, Pi, Goose, Cline and Kilo.") }
+    mut tasks: []string = []
+    mut digests: []string = []
+    for fixture in &cfg.fixtures {
+        if array.contains(&tasks, fixture.name) || array.contains(&digests, fixture.digest) { return .Err("Repeated task in frozen campaign: " + fixture.name) }
+        tasks.push(fixture.name.clone())
+        digests.push(fixture.digest.clone())
+    }
+    if tasks.len < 12 || cfg.repetitions != 3 { return .Err("The goal requires at least twelve distinct tasks and three trials per task.") }
+    mut result := Verdict { status: "pending", candidate: "", model: cfg.model.clone(), tasks: tasks.len, total: tasks.len * cfg.repetitions * names.len, scored: 0, missing: 0, review: 0, provider: 0, required_wins: REQUIRED_WINS, wins: .None, standings: [] }
+    mut standings: []Standing = []
+    mut solved := 0
+    for peer in &cfg.programs {
+        receipts := if peer.name == "dunder" { candidate_root.clone() } else { root.clone() }
+        s := score(&cfg, receipts, &peer)?
+        result.scored += s.scored
+        result.missing += s.missing
+        result.review += s.review
+        result.provider += s.provider
+        if peer.name == "dunder" { solved = s.solved; result.candidate = peer.version.clone() }
+        standings.push(Standing { harness: peer.name.clone(), version: peer.version.clone(), solved: s.solved })
+    }
+    if result.scored == result.total {
+        mut wins := 0
+        for row in &standings { if row.solved < solved { wins += 1 } }
+        result.status = if wins >= REQUIRED_WINS { "met" } else { "not-met" }
+        result.wins = .Some(wins)
+        result.standings = move standings
+    }
+    print(json.to_string(&result).unwrap())
     .Ok
 }
 
@@ -213,13 +286,34 @@ fn series(cfg: &Campaign, root: string, limit: i32, zone: Option<i64>) -> Result
     .Ok
 }
 
+fn load_campaign(root: string) -> Result<Campaign, string> {
+    raw := sys.read_limit(path.join(root, "campaign.json"), 1048576).ok().ok_or("Missing campaign in " + root)?
+    json.from_str<Campaign>(raw).ok().ok_or("Invalid campaign in " + root)
+}
+
+fn candidate_verdict(root: string, candidate_root: string) -> Result<(), string> {
+    mut cfg := load_campaign(root)?
+    candidate := load_campaign(candidate_root)?
+    if candidate.programs.len != 1 || candidate.programs[0].name != "dunder" { return .Err("The candidate campaign must contain only Dunder.") }
+    if cfg.model != candidate.model || cfg.budget_ms != candidate.budget_ms || cfg.repetitions != candidate.repetitions ||
+    cfg.judge_digest != candidate.judge_digest || json.to_string(&cfg.fixtures).unwrap() != json.to_string(&candidate.fixtures).unwrap() {
+        return .Err("Candidate and baseline must match on model, deadline, repetitions, judge and frozen fixtures.")
+    }
+    for i in 0..cfg.programs.len {
+        if cfg.programs[i].name == "dunder" { cfg.programs[i] = candidate.programs[0].clone() }
+    }
+    verdict(&cfg, root, candidate_root)
+}
+
 fn drive() -> Result<(), string> {
-    if sys.arg_count() < 3 { return .Err("series report OUT | series run OUT PLAN [MAX-NEW] | series watch OUT PLAN PROVIDER-OFFSET [MAX-NEW]") }
+    if sys.arg_count() < 3 { return .Err("series report OUT | series verdict OUT [DUNDER-CAMPAIGN] | series run OUT PLAN [MAX-NEW] | series watch OUT PLAN PROVIDER-OFFSET [MAX-NEW]") }
     root := sys.arg(2)
     file := path.join(root, "campaign.json")
-    if sys.arg(1) == "report" && sys.arg_count() == 3 {
-        raw := sys.read_limit(file, 1048576).ok().ok_or("Missing campaign.")?
-        cfg := json.from_str<Campaign>(raw).ok().ok_or("Invalid campaign.")?
+    if sys.arg(1) == "report" || sys.arg(1) == "verdict" {
+        if sys.arg(1) == "verdict" && sys.arg_count() == 4 { return candidate_verdict(root, sys.arg(3)) }
+        if sys.arg_count() != 3 { return .Err("series report OUT | series verdict OUT [DUNDER-CAMPAIGN]") }
+        cfg := load_campaign(root)?
+        if sys.arg(1) == "verdict" { return verdict(&cfg, root, root) }
         return report(&cfg, root)
     }
     watch := sys.arg(1) == "watch"

@@ -84,7 +84,7 @@ Varje rad på stdout är ett JSON-objekt. Först kommer `session` med `id` och `
 
 Dunder Agent ska lösa fler verkliga koduppgifter än **minst tre av fem** open source-harnessar. Den låsta abonnemangsserien jämför OpenCode, Pi, Goose, Cline och Kilo Code med samma GLM-modell, startrevision, uppgift och tidsbudget. Aider reserveras för en separat körning med lämplig modellåtkomst. Kör tre gånger per uppgift på minst tolv uppgifter som omfattar felsökning, flerfilsändringar, teståterkoppling och återupptagning. Räkna en uppgift som löst när en oberoende kontroll passerar i minst två körningar. Redovisa också mediantid och antal manuella ingrepp per harness.
 
-Tolv uppgifter har verifierade startlägen och referenslösningar. De första pilotkörningarna är gjorda. Den fullständiga serien omfattar 216 försök. [Uppgifter, metod och pilotresultat](dogfood/README.md)
+Tolv uppgifter har verifierade startlägen och referenslösningar. Den fullständiga serien omfattar 216 försök. `build/series verdict RESULTATKATALOG` anger vilken version som bedöms, hur många försök som återstår och om en färdig serie når målet. [Uppgifter, metod och resultat](dogfood/README.md)
 
 ## Lokal verifiering
 
