@@ -6,13 +6,14 @@ import std.cmp as cmp
 import std.json as json
 import std.text as text
 import .cli
+import .draft
 import .output
 import .mascot
 import .engine
 import .review
 import .workspace
 
-pub struct Screen { run: engine.Run, input: string, scroll: i32, session_id: string, elapsed: i64, motion: bool, rendered_events: i32, reviewing: bool, journal: rich.PreparedParagraph }
+pub struct Screen { run: engine.Run, input: draft.Draft, scroll: i32, session_id: string, elapsed: i64, motion: bool, rendered_events: i32, reviewing: bool, journal: rich.PreparedParagraph }
 
 fn conversation(run: &engine.Run) -> string {
     mut entries: []string = []
@@ -54,10 +55,7 @@ fn draw(frame: &mut tui.Frame, s: &mut Screen) {
     (status, entry) := footer.rows(1)
     frame.text(status, " " + engine.safe(s.run.status), tui.ink(.LightYellow))
     (input, help) := entry.rows(2)
-    prompt := if s.input == "" { "› " } else { "› " + s.input }
-    mut composer := rich.Paragraph::raw(move prompt).wrap(.Preserve).prepare(input.w)
-    composer.set_top(cmp.max<i32>(0, composer.height() - input.h))
-    composer.render(&mut frame, input)
+    s.input.draw(&mut frame, input, s.run.phase == .Idle)
     hint := if s.run.phase != .Idle { " ↑↓ history   Esc cancel" } else if s.reviewing { " Tab conversation   ↑↓ scroll   Esc quit" } else { " Enter send   ↑↓ history   Tab edits   Esc quit" }
     frame.text(help, hint, tui.ink(.DarkGray))
 }
@@ -71,28 +69,26 @@ fn update(s: &mut Screen, key: tui.Key) -> bool {
         },
         .Up => { s.scroll += 3 },
         .Down => { s.scroll = cmp.max<i32>(0, s.scroll - 3) },
-        .End => { s.scroll = 0 },
+        .End => {
+            s.scroll = 0
+            if s.run.phase == .Idle { s.input.key(.End, engine.MAX_TASK_BYTES) }
+        },
         .Escape => {
             if s.run.phase == .Idle { return false }
             match engine.cancel(&mut s.run) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
         },
-        .Enter if s.run.phase == .Idle && text.trim(s.input) != "" => {
+        .Enter if s.run.phase == .Idle && text.trim(s.input.value) != "" => {
             s.reviewing = false
             s.rendered_events = -1
-            message := s.input.clone()
-            s.input = ""
+            message := s.input.value.clone()
+            s.input = draft.Draft::new()
             s.scroll = 0
             match engine.submit(&mut s.run, message) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
         },
         .Char(c) if s.run.phase == .Approval && (c == `y` || c == `n`) => {
             match engine.approve(&mut s.run, c == `y`) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
         },
-        .Char(c) if s.run.phase == .Idle && s.input.len < 32768 => { s.input += c.str() },
-        .Backspace if s.run.phase == .Idle && s.input.len > 0 => {
-            mut end := s.input.len - 1
-            while end > 0 && s.input[end] >= 128 && s.input[end] < 192 { end -= 1 }
-            s.input = s.input[0..end]
-        },
+        other if s.run.phase == .Idle => { s.input.key(other, engine.MAX_TASK_BYTES) },
         _ => {},
     }
     true

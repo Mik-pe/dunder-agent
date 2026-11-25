@@ -1,0 +1,73 @@
+import tui
+import tui.width as width
+import std.cmp as cmp
+
+pub struct Draft { value: string, cursor: i32 }
+
+fn next(value: string, at: i32) -> i32 {
+    mut cells := 0
+    width.next_cell(value.as_str(), at, &mut cells)
+}
+
+fn previous(value: string, at: i32) -> i32 {
+    mut pos := 0
+    mut last := 0
+    while pos < at { last = pos; pos = next(value, pos) }
+    last
+}
+
+impl Draft {
+    pub fn new() -> Self { Self { value: "", cursor: 0 } }
+
+    fn replace(&mut self, from: i32, to: i32, insert: string) {
+        self.value = self.value[0..from] + insert + self.value[to..self.value.len]
+        self.cursor = from + insert.len
+        if self.cursor > 0 && self.cursor < self.value.len {
+            self.cursor = next(self.value, previous(self.value, self.cursor))
+        }
+    }
+
+    pub fn key(&mut self, key: tui.Key, limit: i64) {
+        match key {
+            .Char(c) => {
+                value := c.str()
+                if i64(self.value.len) + i64(value.len) <= limit { self.replace(self.cursor, self.cursor, value) }
+            },
+            .Home => { self.cursor = 0 },
+            .End => { self.cursor = self.value.len },
+            .Left => { self.cursor = previous(self.value, self.cursor) },
+            .Right if self.cursor < self.value.len => { self.cursor = next(self.value, self.cursor) },
+            .Backspace if self.cursor > 0 => { self.replace(previous(self.value, self.cursor), self.cursor, "") },
+            .Delete if self.cursor < self.value.len => { self.replace(self.cursor, next(self.value, self.cursor), "") },
+            _ => {},
+        }
+    }
+
+    pub fn draw(&self, frame: &mut tui.Frame, bounds: tui.Rect, focused: bool) {
+        (prefix, area) := bounds.cols(2)
+        frame.text(prefix, "›", tui.plain())
+        frame.hide_cursor()
+        if area.w <= 0 || area.h <= 0 { return }
+        mut rows: []i32 = [0]
+        mut at := 0
+        mut x := 0
+        mut caret_x := 0
+        mut caret_row := 0
+        while true {
+            mut span := 1
+            end := if at < self.value.len { width.next_cell(self.value.as_str(), at, &mut span) } else { at }
+            if x > 0 && x + span > area.w { rows.push(at); x = 0 }
+            if at == self.cursor { caret_row = rows.len - 1; caret_x = x }
+            if at == self.value.len { break }
+            x += span
+            at = end
+        }
+        top := cmp.max<i32>(0, caret_row - area.h + 1)
+        rows.push(self.value.len)
+        for i in top..cmp.min<i32>(top + area.h, rows.len - 1) {
+            row := tui.Rect::new(area.x, area.y + i - top, area.w, 1)
+            frame.text(row, self.value[rows[i]..rows[i + 1]], tui.plain())
+        }
+        if focused { frame.set_cursor_position(area.x + caret_x, area.y + caret_row - top) }
+    }
+}

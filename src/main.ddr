@@ -5,6 +5,7 @@ import std.io as io
 import std.parse as parse
 import tui.text as rich
 import .cli
+import .draft
 import .mascot
 import .engine
 import .output
@@ -139,7 +140,7 @@ fn drive(o: &Options) -> Result<(), string> {
             interactive: !o.batch, dunder_skill: o.dunder_skill, phase: .Idle, child: [], stdout: output.Stream::new(), stderr: output.Stream::new(), since: 0, steps: 0, max_steps: o.steps,
             needs_check: false, bad_check: false, corrections: 0, pending: "", status: "Ready", failed: false
         },
-        input: "", scroll: 0, session_id: id.clone(), motion: !o.plain, elapsed: if o.plain { i64(1100) } else { i64(0) }, rendered_events: -1, reviewing: false, journal: rich.Paragraph::raw("").prepare(1),
+        input: draft.Draft::new(), scroll: 0, session_id: id.clone(), motion: !o.plain, elapsed: if o.plain { i64(1100) } else { i64(0) }, rendered_events: -1, reviewing: false, journal: rich.Paragraph::raw("").prepare(1),
     }
     session.save(file, &s.run.history)?
     if !o.jsonl { _ := sys.eprint("Session " + id) }
@@ -155,7 +156,7 @@ fn main() -> i32 {
         mut out := io.stdout()
         return match io.write_str(&mut out, provider.DUNDER_SKILL) { .Ok => 0, .Err(e) => { _ := sys.eprint(e.message()); 1 }, }
     }
-    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.10.0"); return 0 }
+    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.10.1"); return 0 }
     if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
     if (sys.arg_count() == 3 || sys.arg_count() == 4) && sys.arg(1) == "--generate" {
         seconds := if sys.arg_count() == 3 { provider.DEFAULT_TIMEOUT } else {

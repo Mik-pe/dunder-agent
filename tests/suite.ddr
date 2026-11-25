@@ -1,5 +1,7 @@
 capability filesystem, process
 import ..src.workspace
+import ..src.draft
+import tui
 import ..src.reference
 import ..src.review
 import ..src.session
@@ -284,4 +286,54 @@ fn tool(root: string, args: string) -> Result<string, string> {
     assert(workspace.edit_plan(docs, &batch).is_err())
     assert(sys.rename(docs, path.join(dir, "original")).ok && fs.symlink(dir, docs).ok)
     assert(reference.inspect(&refs, &list).is_err())
+}
+
+@test fn draft_edits_whole_graphemes_and_respects_byte_limit() {
+    mut d := draft.Draft::new()
+    for c in "té👩‍💻k".runes() { d.key(.Char(c), 32) }
+    d.key(.Left, 32)
+    d.key(.Backspace, 32)
+    assert(d.value == "ték")
+    d.key(.Left, 32)
+    d.key(.Delete, 32)
+    d.key(.Char(`a`), 32)
+    d.key(.Char(`s`), 32)
+    assert(d.value == "task" && d.cursor == 3)
+    d.key(.Home, 32)
+    d.key(.Backspace, 32)
+    d.key(.Right, 32)
+    d.key(.Char(`å`), 5)
+    assert(d.value == "task" && d.cursor == 1)
+    d.key(.Char(`å`), 6)
+    assert(d.value == "tåask" && d.cursor == 3)
+    d.key(.End, 32)
+    d.key(.Delete, 32)
+    d.key(.Right, 32)
+    assert(d.cursor == d.value.len)
+    d = draft.Draft::new()
+    for c in "👩💻".runes() { d.key(.Char(c), 32) }
+    d.key(.Left, 32)
+    d.key(.Char(`‍`), 32)
+    assert(d.value == "👩‍💻" && d.cursor == d.value.len)
+    d.key(.Backspace, 32)
+    assert(d.value == "" && d.cursor == 0)
+}
+
+@test fn draft_cursor_stays_visible_when_wrapped_and_resized() {
+    mut d := draft.Draft::new()
+    for c in "ab猫cd".runes() { d.key(.Char(c), 32) }
+    mut f := tui.Frame::new(5, 2)
+    d.draw(&mut f, f.area(), true)
+    assert(f.cursor_position().unwrap() == (3, 1))
+    assert(f.symbol_at(2, 0).unwrap() == "猫" && f.symbol_at(2, 1).unwrap() == "d")
+    d.key(.Home, 32)
+    d.draw(&mut f, f.area(), true)
+    assert(f.cursor_position().unwrap() == (2, 0))
+    assert(f.symbol_at(2, 0).unwrap() == "a")
+    d.key(.End, 32)
+    mut wider := tui.Frame::new(8, 2)
+    d.draw(&mut wider, wider.area(), true)
+    assert(wider.cursor_position().unwrap() == (2, 1))
+    d.draw(&mut wider, wider.area(), false)
+    assert(wider.cursor_position().is_none())
 }

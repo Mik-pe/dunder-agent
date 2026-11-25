@@ -17,7 +17,7 @@ dunder-agent
 
 ![Muller i terminalen med ett blixtnedslag över bergen](docs/muller.gif)
 
-Enter skickar en uppgift. Piltangenterna rullar historiken. Tab växlar mellan samtalet och de textändringar agentens filverktyg har sparat. Esc avbryter ett pågående modell- eller kommandoanrop. När agenten är ledig avslutar Esc terminalen. Ett skalkommando som modellen föreslår visas före körning och kräver ett tryck på y. Tryck n för att neka.
+Enter skickar en uppgift. Vänster och höger flyttar markören i utkastet. Home och End går till början och slutet. Backsteg och Delete raderar hela tecken, även sammansatta emojier. Upp och ned rullar historiken. Tab växlar mellan samtalet och de textändringar agentens filverktyg har sparat. Esc avbryter ett pågående modell- eller kommandoanrop. När agenten är ledig avslutar Esc terminalen. Ett skalkommando som modellen föreslår visas före körning och kräver ett tryck på y. Tryck n för att neka.
 
 Kör kommandona från projektets rot. Med `--workspace DIR` kan du välja en annan arbetskatalog.
 
