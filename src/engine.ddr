@@ -5,6 +5,7 @@ import std.json as json
 import std.process as process
 import std.text as text
 import std.time as clock
+import .output
 import .provider
 import .reference
 import .session
@@ -17,8 +18,8 @@ pub const TASK_TOO_LARGE: string = "Task exceeds 32 KiB."
 pub enum Phase { Idle, Model, Command, Check, Approval }
 pub struct Run {
     references: []reference.Reference, history: session.Session, file: string, scratch: string, model: string, model_timeout_s: i64, check: string, root_entries: string,
-    interactive: bool, phase: Phase, children: process.ChildSet, slot: i32,
-    stdout: []u8, stderr: []u8, since: i64, steps: i32, max_steps: i32,
+    interactive: bool, phase: Phase, child: []process.Child,
+    stdout: output.Stream, stderr: output.Stream, since: i64, steps: i32, max_steps: i32,
     needs_check: bool, bad_check: bool, corrections: i32, pending: string, status: string, failed: bool,
 }
 
@@ -57,10 +58,10 @@ pub fn event(run: &mut Run, kind: string, body: string) -> Result<(), string> {
 }
 
 fn start_child(run: &mut Run, move child: process.Child, phase: Phase, status: string) {
-    mut handle := move child
-    run.slot = run.children.insert(&mut handle)
-    run.stdout.clear()
-    run.stderr.clear()
+    assert(run.child.len == 0)
+    run.child.push(move child)
+    run.stdout = output.Stream::new()
+    run.stderr = output.Stream::new()
     run.phase = phase
     run.since = clock.monotonic_ms()
     run.status = status.clone()
@@ -186,9 +187,16 @@ fn act(run: &mut Run, raw: string) -> Result<(), string> {
     result(&mut run, workspace.execute(run.history.root, &action))
 }
 
+fn stop_child(run: &mut Run) {
+    if run.child.len == 0 { return }
+    _ := run.child[0].kill()
+    _ := run.child[0].wait(1000)
+    run.child.clear()
+}
+
 pub fn cancel(run: &mut Run) -> Result<(), string> {
     if run.phase == .Idle { return .Ok }
-    run.children.kill_all()
+    stop_child(&mut run)
     run.phase = .Idle
     run.failed = true
     run.status = "Cancelled"
@@ -196,7 +204,7 @@ pub fn cancel(run: &mut Run) -> Result<(), string> {
 }
 
 pub fn stop(run: &mut Run, reason: string) {
-    run.children.kill_all()
+    stop_child(&mut run)
     run.phase = .Idle
     run.failed = true
     run.status = reason.clone()
@@ -206,37 +214,56 @@ pub fn stop(run: &mut Run, reason: string) {
     }
 }
 
+fn read_pipe(child: &mut process.Child, stream: &mut output.Stream, stderr: bool, compact: bool) -> Result<i64, string> {
+    chunk := if stderr { child.read_stderr(&mut stream.data, 65536, 0) } else { child.read_stdout(&mut stream.data, 65536, 0) }
+    match chunk {
+        .Ok(n) => { if n > 0 { stream.received(n, compact) }; .Ok(n) },
+        .Err(e) => { if e.is_would_block() { return .Ok(0) }; .Err(e.message()) },
+    }
+}
+
 pub fn poll(run: &mut Run) -> Result<bool, string> {
     if run.phase != .Model && run.phase != .Command && run.phase != .Check { return .Ok(false) }
-    waited := run.children.try_wait(run.slot, &mut run.stdout, &mut run.stderr)
-    limit := if run.phase == .Model { run.model_timeout_s * 1000 + 1000 } else { i64(60000) }
-    oversized := run.stdout.len + run.stderr.len > 1048576
-    if oversized || (!waited.exited && clock.monotonic_ms() - run.since >= limit) {
-        run.children.kill_all()
-        if run.phase == .Check { run.needs_check = false; run.bad_check = true }
-        if run.phase == .Command { run.needs_check = true }
-        if run.phase != .Model { result(&mut run, .Err("Command exceeded its time or output limit."))?; return .Ok(true) }
-        if oversized { return .Err("OpenCode exceeded its 1 MiB output limit.") }
-        return .Err(provider.timed_out(run.model_timeout_s))
-    }
+    model := run.phase == .Model
+    waited := run.child[0].try_wait()
     if !waited.ok { return .Err("Could not wait for child process.") }
-    if !waited.exited { return .Ok(false) }
-    stdout := bytes.decode(&run.stdout).unwrap_or_default()
-    stderr := bytes.decode(&run.stderr).unwrap_or_default()
-    if run.phase != .Model {
+    mut draining := false
+    mut consumed := false
+    for _ in 0..8 {
+        a := read_pipe(&mut run.child[0], &mut run.stdout, false, !model)?
+        b := read_pipe(&mut run.child[0], &mut run.stderr, true, !model)?
+        draining = a + b > 0
+        if model && run.stdout.total + run.stderr.total > 1048576 { return .Err("OpenCode exceeded its 1 MiB output limit.") }
+        if !draining { break }
+        consumed = true
+    }
+    limit := if model { run.model_timeout_s * 1000 + 1000 } else { i64(60000) }
+    if (!waited.exited || draining) && clock.monotonic_ms() - run.since >= limit {
+        stop_child(&mut run)
+        if model { return .Err(provider.timed_out(run.model_timeout_s)) }
+        run.needs_check = run.phase == .Command
+        if run.phase == .Check { run.bad_check = true }
+        message := output.report("Error: " + output.TIMEOUT, &run.stdout, &run.stderr)
+        result(&mut run, .Ok(message))?
+        return .Ok(true)
+    }
+    if !waited.exited || draining { return .Ok(consumed) }
+    _ := run.child[0].wait(1000)
+    run.child.clear()
+    if !model {
         if run.phase == .Check {
             run.needs_check = false
             run.bad_check = waited.code != 0 || waited.signal != 0
         } else { run.needs_check = true }
-        report := workspace.clip(f"exit {waited.code}, signal {waited.signal}\n" + stdout + stderr, 16000)
+        report := output.report(f"exit {waited.code}, signal {waited.signal}", &run.stdout, &run.stderr)
         result(&mut run, .Ok(report))?
     } else {
         if waited.code != 0 || waited.signal != 0 {
-            detail := text.trim(stderr)
+            detail := text.trim(bytes.decode(&run.stderr.data).unwrap_or_default())
             if detail == "" { return .Err(f"Model worker exited with code {waited.code}, signal {waited.signal}.") }
             return .Err(workspace.clip(detail, 700))
         }
-        match provider.decision(stdout) {
+        match provider.decision(bytes.decode(&run.stdout.data).unwrap_or_default()) {
             .Ok(raw) => { run.corrections = 0; act(&mut run, raw)? },
             .Err(e) => {
                 if e == "Expected a JSON decision with a tool name." && run.corrections == 0 {

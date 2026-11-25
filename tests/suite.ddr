@@ -4,6 +4,8 @@ import ..src.reference
 import ..src.review
 import ..src.session
 import ..src.provider
+import ..src.output
+import std.bytes as bytes
 import std.json as json
 import std.fs as fs
 import std.path as path
@@ -18,6 +20,31 @@ fn tool(root: string, args: string) -> Result<string, string> {
 
 @test fn truncate_unicode() {
     assert(workspace.clip("åäö", 3) == "å\n[truncated]")
+}
+
+@test fn command_log_keeps_utf8_edges_through_short_reads() {
+    mut stream := output.Stream::new()
+    chunk := bytes.from_text(text.pad_right("åskväder", 379, "⚡"))
+    for _ in 0..150 {
+        bytes.extend(&mut stream.data, &chunk)
+        stream.received(i64(chunk.len), true)
+        assert(stream.data.len <= output.LIMIT)
+    }
+    assert(stream.total == i64(chunk.len) * 150)
+    empty := output.Stream::new()
+    summary := output.report("exit 0, signal 0", &stream, &empty)
+    assert(summary.len <= output.LIMIT && text.starts_with(summary, "exit 0, signal 0\nåskväder"))
+    assert(text.ends_with(summary, "⚡") && !text.contains(summary, "?"))
+    preview := output.preview(summary, 360)
+    assert(preview.len <= 360 && text.starts_with(preview, "exit 0, signal 0") && text.ends_with(preview, "⚡"))
+    assert(text.contains(preview, "bytes omitted") && !text.contains(preview, "?"))
+}
+
+@test fn mixed_command_streams_keep_malformed_bytes_local() {
+    out := output.Stream { data: [u8(97), 255, 98], total: 3 }
+    err := output.Stream { data: bytes.from_text("diagnos"), total: 7 }
+    report := output.report("exit 8, signal 0", &out, &err)
+    assert(report == "exit 8, signal 0\nstdout:\na?b\nstderr:\ndiagnos")
 }
 
 @test fn create_and_edit_preserve_neighbours_and_mode() {

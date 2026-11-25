@@ -5,6 +5,7 @@ import std.fs as fs
 import std.json as json
 import std.path as path
 import std.process as process
+import .output
 import .workspace
 import sys
 
@@ -70,7 +71,7 @@ pub fn requires_check(state: &Session) -> bool {
             return !text.starts_with(result, "exit 0, signal 0\n")
         }
         if tool == "shell" {
-            if text.starts_with(result, "exit ") || result == "Error: Command exceeded its time or output limit." { return true }
+            if output.is_report(result) || result == "Error: Command exceeded its time or output limit." { return true }
         } else if result == "Saved." { return true }
     }
     false

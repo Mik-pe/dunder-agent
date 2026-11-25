@@ -1,0 +1,70 @@
+import std.bytes as bytes
+import std.bytes.utf8 as utf8
+import std.cmp as cmp
+import std.text as text
+
+pub const LIMIT: i32 = 16000
+
+pub const TIMEOUT: string = "Command timed out after 60 s."
+
+pub fn is_report(body: string) -> bool {
+    text.starts_with(body, "exit ") || text.starts_with(body, "Error: " + TIMEOUT)
+}
+
+pub struct Stream { data: []u8, total: i64 }
+
+impl Stream {
+    pub fn new() -> Self { Self { data: [], total: 0 } }
+
+    pub fn received(&mut self, count: i64, compact: bool) {
+        self.total += count
+        if !compact || self.data.len <= LIMIT { return }
+        start := self.data.len - LIMIT / 2
+        for i in 0..LIMIT / 2 { self.data[LIMIT / 2 + i] = self.data[start + i] }
+        self.data.truncate(LIMIT)
+    }
+}
+
+fn readable(data: &[]u8, start: i32, end: i32) -> string {
+    match bytes.decode_range(&data, start, end) {
+        .Ok(text) => { return text },
+        .Err(_) => {},
+    }
+    mut clean: []u8 = []
+    mut i := start
+    while i < end {
+        match utf8.decode_prefix(&data[i..end]) {
+            .Scalar(_, n) => { bytes.extend_range(&mut clean, &data, i, i + n); i += n },
+            _ => { clean.push(b'?'); i += 1 },
+        }
+    }
+    bytes.decode(&clean).unwrap()
+}
+
+fn continuation(byte: u8) -> bool { byte >= 128 && byte < 192 }
+
+fn excerpt(data: &[]u8, total: i64, budget: i32) -> string {
+    if total <= i64(budget) { return readable(&data, 0, data.len) }
+    mut head := (budget - 48) / 2
+    mut tail := data.len - head
+    while head > 0 && continuation(data[head]) { head -= 1 }
+    while tail < data.len && continuation(data[tail]) { tail += 1 }
+    skipped := total - i64(head + data.len - tail)
+    readable(&data, 0, head) + f"\n[... {skipped} bytes omitted ...]\n" + readable(&data, tail, data.len)
+}
+
+pub fn report(status: string, out: &Stream, err: &Stream) -> string {
+    budget := LIMIT - status.len - 1
+    if err.total == 0 { return status + "\n" + excerpt(&out.data, out.total, budget) }
+    if out.total == 0 { return status + "\nstderr:\n" + excerpt(&err.data, err.total, budget - 8) }
+    available := budget - 17
+    half := available / 2
+    out_budget := available - i32(cmp.min<i64>(err.total, i64(available - half)))
+    err_budget := available - i32(cmp.min<i64>(out.total, i64(out_budget)))
+    status + "\nstdout:\n" + excerpt(&out.data, out.total, out_budget) + "\nstderr:\n" + excerpt(&err.data, err.total, err_budget)
+}
+
+pub fn preview(report: string, budget: i32) -> string {
+    if report.len <= budget { return report.clone() }
+    excerpt(&report.bytes(), i64(report.len), budget)
+}

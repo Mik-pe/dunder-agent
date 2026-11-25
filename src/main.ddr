@@ -2,12 +2,12 @@ capability filesystem, process, stdio, unsafe, network
 import std.bytes as bytes
 import std.fs as fs
 import std.io as io
-import std.process as process
 import std.parse as parse
 import tui.text as rich
 import .cli
 import .mascot
 import .engine
+import .output
 import .provider
 import .reference
 import .review
@@ -122,7 +122,7 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
     mut s := ui.Screen {
         run: engine.Run {
             references: o.references.clone(), history: move history, file: file.clone(), scratch: scratch.clone(), model: o.model.clone(), model_timeout_s: o.timeout_s, check: o.check.clone(), root_entries: "",
-            interactive: !o.batch, phase: .Idle, children: process.ChildSet::new(1), slot: -1, stdout: [], stderr: [], since: 0, steps: 0, max_steps: o.steps,
+            interactive: !o.batch, phase: .Idle, child: [], stdout: output.Stream::new(), stderr: output.Stream::new(), since: 0, steps: 0, max_steps: o.steps,
             needs_check: false, bad_check: false, corrections: 0, pending: "", status: "Ready", failed: false
         },
         input: "", scroll: 0, session_id: id.clone(), motion: !o.plain, elapsed: if o.plain { i64(1100) } else { i64(0) }, rendered_events: -1, reviewing: false, journal: rich.Paragraph::raw("").prepare(1),
@@ -136,7 +136,7 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
 }
 
 fn main() -> i32 {
-    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.7.0"); return 0 }
+    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.8.0"); return 0 }
     if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
     if (sys.arg_count() == 3 || sys.arg_count() == 4) && sys.arg(1) == "--generate" {
         seconds := if sys.arg_count() == 3 { provider.DEFAULT_TIMEOUT } else {

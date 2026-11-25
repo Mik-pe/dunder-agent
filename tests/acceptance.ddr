@@ -50,6 +50,17 @@ fn reply(req: &http.Request) -> string {
         assert(text.contains(body_text, "read-only"))
         return r#"{"tool":"finish","answer":"Write rejected."}"#
     }
+    if task == "repair from the check log" {
+        if last == "user" { return r#"{"tool":"check"}"# }
+        assert(body_text.len <= 16000 && text.contains(body_text, "bytes omitted"))
+        assert(text.contains(body_text, "build started") && text.contains(body_text, "build ended"))
+        if text.starts_with(body_text, "exit 3, signal 0\n") {
+            assert(text.contains(body_text, "stderr:") && text.ends_with(body_text, "wrong value in level.txt\n"))
+            return r#"{"tool":"edit","path":"level.txt","old":"3","new":"4","check":true}"#
+        }
+        assert(text.starts_with(body_text, "exit 0, signal 0\n") && text.ends_with(body_text, "tests passed\n"))
+        return r#"{"tool":"finish","answer":"Level verified."}"#
+    }
     if task == "model variant" {
         assert(body.get_str(ref, "providerID").unwrap() == "fixture" && body.get_str(ref, "id").unwrap() == "vendor/model" && body.get_str(ref, "variant").unwrap() == "low")
         return r#"{"tool":"finish","answer":"Variant received."}"#
@@ -172,6 +183,13 @@ fn main() -> i32 {
     defer { _ := server.kill(); _ := server.wait(1000) }
     assert(server.read_stdout_line(5000).unwrap().is_some())
     check_stdin(app, dir)
+    assert(sys.write(path.join(dir, "level.txt"), "3").is_ok())
+    log := "printf 'build started\n'; awk 'BEGIN {for (i=0;i<100000;i++) print \"compiling module\"}'; printf 'build ended\n'; "
+    verify_level := log + "if test \"$(cat level.txt)\" = 4; then echo 'tests passed'; else printf '\\377wrong value in level.txt\n' >&2; exit 3; fi"
+    repaired := run(app, dir, ["--check", verify_level.clone(), "run", "repair from the check log"])
+    assert(repaired.succeeded() && repaired.stdout_text() == "Level verified.\n")
+    assert(text.contains(repaired.stderr_text(), "check exit 3") && text.contains(repaired.stderr_text(), "wrong value in level.txt"))
+    assert(text.contains(repaired.stderr_text(), "check exit 0") && sys.read(path.join(dir, "level.txt")).unwrap() == "4")
     selected := run(app, dir, ["--model", "fixture/vendor/model#low", "run", "model variant"])
     assert(selected.succeeded() && selected.stdout_text() == "Variant received.\n")
     rejected := run(app, dir, ["--model", "fixture/m#", "run", "unreachable"])
@@ -252,6 +270,6 @@ fn main() -> i32 {
     expired := timed.exec()
     assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
     assert(fs.list_dir(scratch).unwrap().len == 0)
-    print("PASS mascot, CLI help, stdin tasks, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
+    print("PASS mascot, CLI help, stdin tasks, repair from noisy diagnostics, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
     0
 }

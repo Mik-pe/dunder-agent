@@ -37,6 +37,8 @@ Vid turens början får agenten rotens filnamn och instruktionerna i `AGENTS.md`
 
 `--check` gäller den aktuella körningen. Har agenten ändrat en fil körs kontrollen före slutsvaret även om modellen glömmer att begära den. Om körningen avbryts efter en skrivning använder nästa tur den sparade historiken för att fånga upp kontrollen. Batchläget ger felkod för bland annat röd slutkontroll, modellfel, blockerat uppdrag och uppnådd stegbudget. Standardgränsen är 24 modellbeslut per tur och kan ändras med `--max-steps`.
 
+Lokala kommandon får 60 sekunder. Agenten sparar början och slutet av långa loggar från både stdout och stderr. Resultatet i sessionen ryms inom 16 000 byte. Vid en misslyckad kontroll visar CLI:t även ett utdrag på stderr.
+
 ### Lokala referenser
 
 Ge agenten läsåtkomst till dokumentation eller bibliotek som ligger utanför projektet. Sätt `DUNDER_SRC` till katalogen där du har hämtat Dunders källkod och kör

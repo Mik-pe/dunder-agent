@@ -1,4 +1,5 @@
 capability stdio, filesystem, process
+import std.cmp as cmp
 import std.io as io
 import std.json as json
 import std.process as process
@@ -7,6 +8,7 @@ import std.terminal as terminal
 import std.text as text
 import std.time as clock
 import .engine
+import .output
 import .mascot
 import sys
 
@@ -24,11 +26,12 @@ fn emit(run: &engine.Run, cursor: &mut i32) {
             _ := sys.eprint("· " + engine.safe(engine.label(&action)))
         } else if entry.kind == "assistant" {
             print(engine.safe(entry.body))
-        } else if entry.kind == "result" && index > 0 && text.starts_with(entry.body, "exit ") {
+        } else if entry.kind == "result" && index > 0 && output.is_report(entry.body) {
             prev := &run.history.events[index - 1]
             action := json.Doc::parse_text(prev.body)
             if prev.kind == "action" && action.get_str(action.root, "tool").unwrap_or_default() == "check" {
-                _ := sys.eprint("  check " + text.split(entry.body, "\n")[0])
+                summary := if text.starts_with(entry.body, "exit 0, signal 0\n") { "exit 0, signal 0" } else { output.preview(entry.body, 800) }
+                _ := sys.eprint("  check " + engine.safe(summary))
             }
         }
     }
@@ -42,6 +45,7 @@ pub fn batch(run: &mut engine.Run, prompt: string, plain: bool) -> Result<(), st
     color := process.env("NO_COLOR").is_none()
     mut drawn := false
     mut previous_tick := i64(-1)
+    mut idle_ms := i64(1)
     defer { if drawn { _ := sys.write_stderr("\r\u{1b}[2K") } }
     while run.phase != .Idle {
         if signals.poll().is_some() { engine.cancel(&mut run)?; break }
@@ -64,7 +68,10 @@ pub fn batch(run: &mut engine.Run, prompt: string, plain: bool) -> Result<(), st
                 drawn = true
             } else if drawn { _ := sys.write_stderr("\r\u{1b}[2K"); drawn = false }
         }
-        if !changed { sys.sleep_ms(30) }
+        if changed { idle_ms = 1 } else {
+            sys.sleep_ms(idle_ms)
+            idle_ms = cmp.min<i64>(30, idle_ms * 2)
+        }
     }
     emit(&run, &mut cursor)
     if run.failed { return .Err(run.status.clone()) }

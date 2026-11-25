@@ -6,6 +6,7 @@ import std.cmp as cmp
 import std.json as json
 import std.text as text
 import .cli
+import .output
 import .mascot
 import .engine
 import .review
@@ -20,7 +21,7 @@ fn conversation(run: &engine.Run) -> string {
             "user" => entries.push("› " + e.body),
             "assistant" => entries.push(e.body.clone()),
             "action" => { a := json.Doc::parse_text(e.body); entries.push("· " + engine.label(&a)) },
-            "result" => entries.push("  " + workspace.clip(e.body, 180)),
+            "result" => entries.push("  " + if output.is_report(e.body) { output.preview(e.body, 360) } else { workspace.clip(e.body, 180) }),
             "notice" => entries.push(e.body.clone()),
             _ => {},
         }
