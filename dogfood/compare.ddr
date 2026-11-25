@@ -1,5 +1,6 @@
 capability filesystem, process, stdio
 import .competitors
+import .cline
 import .corpus
 import std.fs as fs
 import std.json as json
@@ -10,6 +11,11 @@ import sys
 
 fn main() -> i32 {
     if path.basename(sys.arg(0)) == "check" { return corpus.check_workspace() }
+    if sys.arg_count() == 7 && sys.arg(1) == "--cline-resume" {
+        return match cline.resume(sys.arg(2), sys.arg(3), sys.arg(4), sys.arg(5), sys.arg(6)) {
+            .Ok => 0, .Err(e) => { _ := sys.eprint(e); 1 },
+        }
+    }
     if sys.arg_count() != 6 {
         _ := sys.eprint("compare CASE HARNESS EXECUTABLE REPETITION OUTPUT-DIRECTORY")
         return 2
@@ -79,7 +85,7 @@ fn main() -> i32 {
             digest := corpus.snapshot(work, "").unwrap()
             if !corpus.has_passing_check(work, digest) { status = "missing-first-check"; break }
             assert(sys.remove_file(path.join(temp, "checked")).ok)
-            id = competitors.session_id(peer, &output)
+            id = if peer == "cline" { cline.session_id(temp, work) } else { competitors.session_id(peer, &output) }
             if id == "" { status = "resume-unavailable"; break }
         }
     }

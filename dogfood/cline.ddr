@@ -1,0 +1,121 @@
+capability filesystem, process, stdio
+import std.fs as fs
+import std.json as json
+import std.path as path
+import std.process as process
+import std.signal as signal
+import std.text as text
+import sys
+
+pub fn session_id(dir: string, work: string) -> string {
+    sessions := path.join(dir, "cline/sessions")
+    names := match fs.list_dir(sessions) { .Ok(v) => v, .Err(_) => { return "" }, }
+    mut found := ""
+    for name in &names {
+        record := sys.read_text_limit(path.join(path.join(sessions, name), name + ".json"), 1048576)
+        if !record.ok { continue }
+        doc := json.Doc::parse_text(record.value)
+        if doc.get_str(doc.root, "session_id").unwrap_or_default() != name || doc.get_str(doc.root, "cwd").unwrap_or_default() != work { continue }
+        if found != "" { return "" }
+        found = name.clone()
+    }
+    found
+}
+
+fn tmux(socket: string, args: &[]string) -> process.Output {
+    mut all: []string = ["-L", socket.clone(), "-f", "/dev/null"]
+    for arg in &args { all.push(arg.clone()) }
+    mut cmd := process.Command::new("tmux", move all)
+    cmd.set_timeout(1000)
+    cmd.exec()
+}
+
+fn transcript(file: string) -> Result<json.Doc, string> {
+    raw := sys.read_text_limit(file, 16777216)
+    if !raw.ok { return .Err("Cline transcript unavailable.") }
+    doc := json.Doc::parse_text(raw.value)
+    if !doc.ok || doc.kind(doc.field(doc.root, "messages")) != .Array { return .Err("Invalid Cline transcript.") }
+    .Ok(move doc)
+}
+
+fn final_answer(doc: &json.Doc, start: i32, prompt: string) -> Option<string> {
+    messages := doc.field(doc.root, "messages")
+    n := doc.count(messages)
+    if n < start + 2 { return .None }
+    mut asked := false
+    for i in start..n {
+        msg := doc.at(messages, i)
+        if doc.get_str(msg, "role").unwrap_or_default() != "user" { continue }
+        parts := doc.field(msg, "content")
+        for j in 0..doc.count(parts) {
+            part := doc.at(parts, j)
+            if doc.get_str(part, "type").unwrap_or_default() == "text" && text.contains(doc.get_str(part, "text").unwrap_or_default(), prompt) { asked = true }
+        }
+    }
+    if !asked { return .None }
+    last := doc.at(messages, n - 1)
+    role := doc.get_str(last, "role").unwrap_or_default()
+    parts := doc.field(last, "content")
+    mut answer := ""
+    for j in 0..doc.count(parts) {
+        part := doc.at(parts, j)
+        kind := doc.get_str(part, "type").unwrap_or_default()
+        if role == "assistant" && kind == "tool_use" { return .None }
+        if role == "assistant" && kind == "text" { answer += doc.get_str(part, "text").unwrap_or_default() }
+        if role == "user" && kind == "tool_result" && doc.get_str(part, "name").unwrap_or_default() == "submit_and_exit" {
+            content := doc.get_str(part, "content").unwrap_or_default()
+            if text.starts_with(content, "Submission recorded") { answer = content.clone() }
+        }
+    }
+    if text.trim(answer) == "" { .None } else { .Some(move answer) }
+}
+
+pub fn resume(app: string, work: string, dir: string, id: string, prompt: string) -> Result<(), string> {
+    if id == "" || session_id(dir, work) != id { return .Err("Could not identify the saved Cline session.") }
+    data := path.join(dir, "cline")
+    base := path.join(path.join(data, "sessions"), id)
+    file := path.join(base, id + ".messages.json")
+    initial := transcript(file)?
+    start := initial.count(initial.field(initial.root, "messages"))
+    socket := "dunder-cline-" + sys.pid().str()
+    mut signals := match signal.SignalWatcher::watch(&[signal.Signal.Int, signal.Signal.Term]) { .Ok(w) => move w, .Err(e) => { return .Err(e.message()) }, }
+    launch := tmux(socket, ["new-session", "-d", "-s", "task", "-c", work.clone(), "-x", "120", "-y", "30", app.clone(), "--data-dir", data.clone(), "--config", path.join(dir, "cline-config"), "--cwd", work.clone(), "--auto-approve", "true", "--id", id.clone()])
+    if !launch.succeeded() { return .Err("Could not open Cline in tmux.") }
+    defer { _ := tmux(socket, ["kill-server"]) }
+    mut sent := false
+    while true {
+        if signals.poll().is_some() { return .Err("Cline resume cancelled.") }
+        if !sent {
+            pane := tmux(socket, ["capture-pane", "-p", "-t", "task"])
+            if !pane.succeeded() { return .Err("Cline closed before accepting the follow-up.") }
+            if text.contains(pane.stdout_text(), "Ask anything") {
+                if !tmux(socket, ["set-buffer", "--", prompt.clone()]).succeeded() ||
+                !tmux(socket, ["paste-buffer", "-p", "-t", "task"]).succeeded() ||
+                !tmux(socket, ["send-keys", "-t", "task", "Enter"]).succeeded() { return .Err("Could not deliver the Cline follow-up.") }
+                sent = true
+            }
+        } else {
+            meta := sys.read_text_limit(path.join(base, id + ".json"), 1048576)
+            if meta.ok {
+                doc := json.Doc::parse_text(meta.value)
+                if doc.get_str(doc.root, "status").unwrap_or_default() == "idle" {
+                    match transcript(file) {
+                        .Ok(history) => {
+                            match final_answer(&history, start, prompt) {
+                                .Some(answer) => {
+                                    print(r#"{"type":"run_result","sessionId":"# + json.quote(id) + r#","text":"# + json.quote(answer) + "}")
+                                    return .Ok
+                                },
+                                .None => {},
+                            }
+                        },
+                        .Err(_) => {},
+                    }
+                }
+            }
+            if !tmux(socket, ["has-session", "-t", "task"]).succeeded() { return .Err("Cline closed before completing the follow-up.") }
+        }
+        sys.sleep_ms(250)
+    }
+    .Err("Cline did not finish.")
+}

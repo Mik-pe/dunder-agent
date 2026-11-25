@@ -20,7 +20,7 @@ Den ursprungliga implementationen klarade ett av fyra oberoende prov och agenten
 
 ## Jämför harnessar lokalt
 
-Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
+Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Återupptagning med Cline kräver också tmux. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
 
 ```sh
 dunder build dogfood/compare.ddr --locked -o build/compare
@@ -45,6 +45,17 @@ I pilotuppgiften `limit` klarade Dunder Agent, OpenCode 2.3.2, Pi 1.6.0, Goose 1
 I ett separat försök med `billing-resume` klarade Dunder Agent första delens lokala kontroll. Den återupptagna sessionen redigerade rätt fil men använde en okänd strängkonvertering. Den hann inte reparera kompileringsfelet inom den gemensamma femminutersgränsen. Försöket räknas som timeout. Bedömaren ger nu agenten möjlighet att avsluta underprocesserna när tiden tar slut.
 
 Kilo Code 7.8.32 klarade också pilotuppgiften `limit`. Bedömaren kontrollerades först mot en lokal HTTP-server med en testnyckel. För abonnemangsserien lades Kilo Code till innan första formella försöket startade. Pi, Goose, Kilo Code och Cline kan använda `ZAI_API_KEY` eller nyckeln i OpenCodes GLM-konfiguration. Aider saknas i leverantörens lista över tillåtna abonnemangsverktyg. En framtida jämförelse med Aider kräver separat modellåtkomst. [Z.AI:s verktygslista](https://docs.z.ai/devpack/tool/others)
+
+### Återupptagning med Cline
+
+Cline 3.0.75 sparar sessionen med ett annat id än `conversationId` i JSON-händelserna. I lokal kontroll avvisade `cline --json --id` följdfrågan även med det sparade sessions-id:t. Bedömaren öppnar därför samma session i Clines ordinarie terminal, skickar följdfrågan och väntar på dess sparade slutsvar. Tiden för omstarten ingår i samma femminutersbudget. Ett lokalt prov med det riktiga CLI:t och en modellfixtur verifierar att båda instruktionerna når modellen efter processbytet. [Clines CLI-referens](https://github.com/cline/cline/blob/main/docs/cli/cli-reference.mdx)
+
+```sh
+dunder build dogfood/compare.ddr --offline --locked -o build/compare
+dunder run dogfood/cline_test.ddr --offline --locked -- build/compare "$(command -v cline)"
+```
+
+Den inledande serien med Dunder Agent 0.2.0 sparas som baslinje. Dess Cline-försök med felaktigt sessions-id står kvar för granskning. Serien med 0.5.0 börjar om för alla sex deltagare med samma tolv uppgifter, modell, tidsbudget och tre upprepningar. Cline står först i den roterande startordningen för att den rättade återupptagningen ska provas tidigt.
 
 ## Kör eller återuppta serien
 

@@ -1,0 +1,86 @@
+capability filesystem, network, process, stdio
+import http
+import .cline
+import std.bytes as bytes
+import std.fs as fs
+import std.json as json
+import std.net as net
+import std.path as path
+import std.process as process
+import std.text as text
+import sys
+
+const FIRST: string = "Remember our marker teal-candle."
+const NEXT: string = "State our earlier marker."
+
+fn chunk(delta: string, stop: string) -> string {
+    "data: " + r#"{"id":"fixture","object":"chat.completion.chunk","created":1,"model":"glm-5.4","choices":[{"index":0,"delta":"# + delta + r#","finish_reason":"# + stop + "}]}\n\n"
+}
+
+fn serve() {
+    listener := net.TcpListener::listen_addr(net.SocketAddr::loopback_v4(0), 4).unwrap()
+    print(listener.local_port().str())
+    for i in 0..2 {
+        stream := listener.accept().unwrap()
+        req := http.read_request(&stream, 4194304, 4000)
+        assert(req.ok && req.target == "/v4/chat/completions")
+        assert(http.header(&req, "authorization") == "Bearer fixture")
+        payload := json.Doc::parse_text(bytes.decode(&req.body).unwrap())
+        messages := payload.raw_json(payload.field(payload.root, "messages"))
+        assert(text.contains(messages, FIRST) && text.contains(messages, NEXT) == (i == 1))
+        delta := if i == 0 {
+            r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"submit_and_exit","arguments":"{\"summary\":\"teal-candle\",\"verified\":true}"}}]}"#
+        } else { r#"{"role":"assistant","content":"teal-candle"}"# }
+        end := if i == 0 { json.quote("tool_calls") } else { json.quote("stop") }
+        raw := chunk(delta, "null") + chunk("{}", end) + "data: [DONE]\n\n"
+        assert(http.write_response(&stream, 200, "text/event-stream", [], [], &bytes.from_text(raw), false))
+    }
+}
+
+fn run(exe: string, move args: []string, root: string, work: string) -> process.Output {
+    mut cmd := process.Command::new(exe.clone(), move args)
+    cmd.clear_env()
+    cmd.set_env("PATH", process.env_or("PATH", ""))
+    cmd.set_env("HOME", root.clone())
+    cmd.set_env("PWD", work.clone())
+    cmd.set_env("HTTP_PROXY", "http://127.0.0.1:9")
+    cmd.set_env("HTTPS_PROXY", "http://127.0.0.1:9")
+    cmd.set_env("NO_PROXY", "127.0.0.1,localhost")
+    cmd.set_env("DISABLE_TELEMETRY", "1")
+    cmd.set_cwd(work.clone())
+    cmd.set_timeout(20000)
+    cmd.exec()
+}
+
+fn main() -> i32 {
+    if sys.arg_count() == 2 && sys.arg(1) == "--serve" { serve(); return 0 }
+    if sys.arg_count() != 3 { _ := sys.eprint("cline_test COMPARE CLINE"); return 2 }
+    judge := fs.realpath(sys.arg(1)).value
+    app := fs.realpath(sys.arg(2)).value
+    assert(sys.metadata(judge).is_file && sys.metadata(app).is_file)
+    temp := fs.temp_dir("cline-resume-test-").value
+    defer { _ := fs.remove_all(temp) }
+    work := path.join(temp, "work")
+    data := path.join(temp, "cline")
+    cfg := path.join(temp, "cline-config")
+    settings := path.join(data, "settings")
+    assert(fs.mkdir_all(work).ok && fs.mkdir_all(settings).ok)
+    cmd := process.Command::new(sys.arg(0), ["--serve"])
+    mut server := cmd.spawn().unwrap()
+    defer { _ := server.kill(); _ := server.wait(1000) }
+    port := server.read_stdout_line(3000).unwrap().unwrap()
+    provider := r#"{"version":1,"lastUsedProvider":"openai-compatible","modes":{},"providers":{"openai-compatible":{"settings":{"provider":"openai-compatible","baseUrl":"http://127.0.0.1:"# + text.trim(port) + r#"/v4","model":"glm-5.4","apiKey":"fixture"},"updatedAt":"2026-01-01T00:00:00.000Z","tokenSource":"manual"}}}"#
+    assert(fs.write_private_text_atomic(path.join(settings, "providers.json"), provider).is_ok())
+    first := run(app, ["--data-dir", data.clone(), "--config", cfg.clone(), "--cwd", work.clone(), "--json", FIRST], temp, work)
+    assert(first.succeeded())
+    id := cline.session_id(temp, work)
+    assert(id != "" && !text.starts_with(id, "conv_"))
+    again := run(judge, ["--cline-resume", app.clone(), work.clone(), temp.clone(), id.clone(), NEXT], temp, work)
+    assert(again.succeeded())
+    receipt := json.Doc::parse_text(again.stdout_text())
+    assert(receipt.get_str(receipt.root, "sessionId").unwrap() == id && receipt.get_str(receipt.root, "text").unwrap() == "teal-candle")
+    assert(cline.session_id(temp, work) == id)
+    assert(server.wait(3000).code == 0)
+    print("PASS Cline CLI task, process restart, same session and follow-up history at local provider")
+    0
+}
