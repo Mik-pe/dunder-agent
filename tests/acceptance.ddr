@@ -37,6 +37,18 @@ fn reply(req: &http.Request) -> string {
     assert(body.get_str(ref, "id").unwrap() == "glm-5.4" && body.get_str(ref, "variant").is_none())
     if task == "leave pending" { return r#"{"tool":"edit","path":"note.txt","old":"old","new":"unverified"}"# }
     if task == "continue now" { return r#"{"tool":"finish","answer":"Continued."}"# }
+    if task == "group edits" || task == "stale group" {
+        if last == "user" {
+            old := if task == "stale group" { "stale" } else { "second" }
+            return r#"{"tool":"edit_many","edits":[{"path":"note.txt","old":"first","new":"prefix"},{"path":"b.txt","old":"# + json.quote(old) + r#","new":"done"},{"path":"note.txt","old":"prefix","new":"verified"}],"check":true}"#
+        }
+        if task == "stale group" {
+            assert(text.contains(body_text, "b.txt") && text.contains(body_text, "no longer matches"))
+            return r#"{"tool":"finish","blocked":true,"answer":"Edit conflict."}"#
+        }
+        assert(text.starts_with(body_text, "exit 0, signal 0"))
+        return r#"{"tool":"finish","answer":"Group checked."}"#
+    }
     if task == "one batch" {
         assert(text.contains(envelope.get_str(envelope.root, "rootEntriesAtTurnStart").unwrap(), "note.txt"))
         if last == "user" { return r#"{"tool":"read_many","paths":["note.txt","absent"]}"# }
@@ -110,6 +122,19 @@ fn main() -> i32 {
     rejected := run(app, dir, ["--model", "fixture/m#", "run", "unreachable"])
     assert(rejected.code == 2 && !text.contains(rejected.stderr_text(), "Session "))
     note := path.join(dir, "note.txt")
+    assert(sys.write(note, "first").is_ok())
+    second := path.join(dir, "b.txt")
+    assert(sys.write(second, "second").is_ok())
+    verify := "test \"$(cat note.txt)\" = verified && test \"$(cat b.txt)\" = done && echo passed >> checks"
+    stale := run(app, dir, ["--check", verify.clone(), "--max-steps", "2", "run", "stale group"])
+    assert(!stale.succeeded() && stale.stdout_text() == "Edit conflict.\n")
+    assert(sys.read(note).unwrap() == "first" && sys.read(second).unwrap() == "second" && !sys.metadata(path.join(dir, "checks")).ok)
+    group := run(app, dir, ["--check", verify.clone(), "--max-steps", "2", "run", "group edits"])
+    assert(group.succeeded() && group.stdout_text() == "Group checked.\n")
+    assert(sys.read(note).unwrap() == "verified" && sys.read(second).unwrap() == "done" && sys.read(path.join(dir, "checks")).unwrap() == "passed\n")
+    group_id := text.split(text.split(group.stderr_text(), "\n")[0], " ")[1].clone()
+    shown := run(app, dir, ["changes", group_id])
+    assert(shown.stdout_text() == "edit note.txt\n- first\n+ prefix\n\nedit b.txt\n- second\n+ done\n\nedit note.txt\n- prefix\n+ verified\n")
     assert(sys.write(note, "old").is_ok())
     batched := run(app, dir, ["--check", "test \"$(cat note.txt)\" = checked", "--max-steps", "3", "run", "one batch"])
     assert(batched.succeeded() && batched.stdout_text() == "Checked.\n")
@@ -156,6 +181,6 @@ fn main() -> i32 {
     expired := timed.exec()
     assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
     assert(fs.list_dir(scratch).unwrap().len == 0)
-    print("PASS mascot, CLI help, pipe output, edit, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
+    print("PASS mascot, CLI help, pipe output, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
     0
 }

@@ -6,8 +6,9 @@ Choose one action:
 {"tool":"read","path":"src/file","offset":0} reads text starting at an optional UTF-8 byte offset. A response is limited to 16000 bytes.
 {"tool":"read_many","paths":["src/file","tests/file"]} reads up to eight related files in one decision. Each result contains up to 4096 bytes or a per-file error. Continue long files with read. Use this when implementation and tests are already visible in the listing.
 {"tool":"edit","path":"src/file","old":"exact unique text","new":"replacement"} replaces one occurrence. Read the file first.
+{"tool":"edit_many","edits":[{"path":"a","old":"exact old text","new":"replacement"},{"path":"b","old":"exact old text","new":"replacement"}],"check":true} applies 1 to 8 edits in order. Use it when several edits are known from the files you read. All matches are checked first, including dependent edits to one file. Every saved edit is recorded separately. If a write fails, inspect the results before retrying.
 {"tool":"create","path":"src/file","content":"full text"} exclusively creates a file and missing directories.
-Add "check":true to the last edit or create in a change to run the configured check immediately and receive its output.
+Add "check":true to the final edit, edit_many or create in a change to run the configured check immediately and receive its output.
 {"tool":"check"} runs the local verification command provided by the user. Use it after changes when configured. Fix failures that belong to the task.
 {"tool":"shell","command":"..."} asks the human in the TUI to approve this exact command. Shell commands are unavailable in batch mode.
 {"tool":"finish","answer":"..."} ends the turn. Report actual changes and observed verification. If blocked, set "blocked":true and name the missing input or dependency.

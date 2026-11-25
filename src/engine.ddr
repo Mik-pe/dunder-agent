@@ -108,23 +108,50 @@ pub fn approve(run: &mut Run, allow: bool) -> Result<(), string> {
     shell(&mut run, command, .Command)
 }
 
+fn check(run: &mut Run) -> Result<(), string> {
+    event(&mut run, "action", r#"{"tool":"check"}"#)?
+    line := run.check.clone()
+    shell(&mut run, line, .Check)
+}
+
+fn write_files(run: &mut Run, action: &json.Doc, raw: string, group: bool) -> Result<(), string> {
+    actions := if group {
+        match workspace.edit_plan(run.history.root, &action) {
+            .Ok(ops) => ops,
+            .Err(reason) => {
+                event(&mut run, "action", raw)?
+                return result(&mut run, .Err(reason))
+            },
+        }
+    } else { [raw.clone()] }
+    for op in &actions {
+        event(&mut run, "action", op)?
+        item := json.Doc::parse_text(op)
+        match workspace.execute(run.history.root, &item) {
+            .Ok(saved) => { run.needs_check = true; event(&mut run, "result", saved)? },
+            .Err(reason) => { return result(&mut run, .Err(reason)) },
+        }
+    }
+    if run.check != "" && action.get_bool(action.root, "check").unwrap_or(false) { return check(&mut run) }
+    request(&mut run)
+}
+
 fn act(run: &mut Run, raw: string) -> Result<(), string> {
     action := json.Doc::parse_text(raw)
     tool := action.get_str(action.root, "tool").unwrap_or_default()
     if tool == "finish" {
         answer := action.get_str(action.root, "answer").unwrap_or_default()
         if text.trim(answer) == "" { return result(&mut run, .Err("A finish action needs a nonempty answer.")) }
-        if run.needs_check && run.check != "" {
-            event(&mut run, "action", r#"{"tool":"check"}"#)?
-            line := run.check.clone()
-            return shell(&mut run, line, .Check)
-        }
+        if run.needs_check && run.check != "" { return check(&mut run) }
         event(&mut run, "assistant", answer)?
         run.phase = .Idle
         blocked := action.get_bool(action.root, "blocked").unwrap_or(false)
         run.failed = run.bad_check || blocked
         run.status = if run.bad_check { "Local check failed" } else if blocked { "Task blocked" } else { "Ready" }
         return .Ok
+    }
+    if tool == "edit" || tool == "create" || tool == "edit_many" {
+        return write_files(&mut run, &action, raw, tool == "edit_many")
     }
     event(&mut run, "action", raw)?
     if tool == "shell" {
@@ -141,17 +168,7 @@ fn act(run: &mut Run, raw: string) -> Result<(), string> {
         line := run.check.clone()
         return shell(&mut run, line, .Check)
     }
-    answer := workspace.execute(run.history.root, &action)
-    if answer.is_ok() && (tool == "edit" || tool == "create") {
-        run.needs_check = true
-        if run.check != "" && action.get_bool(action.root, "check").unwrap_or(false) {
-            event(&mut run, "result", answer.unwrap())?
-            event(&mut run, "action", r#"{"tool":"check"}"#)?
-            line := run.check.clone()
-            return shell(&mut run, line, .Check)
-        }
-    }
-    result(&mut run, move answer)
+    result(&mut run, workspace.execute(run.history.root, &action))
 }
 
 pub fn cancel(run: &mut Run) -> Result<(), string> {

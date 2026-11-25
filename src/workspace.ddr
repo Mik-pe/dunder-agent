@@ -3,6 +3,7 @@ import std.array as array
 import std.bytes as bytes
 import std.fs as fs
 import std.json as json
+import std.map as map
 import std.path as path
 import std.process as process
 import std.set as set
@@ -111,25 +112,61 @@ fn search(root: string, query: string) -> Result<string, string> {
     .Ok(report)
 }
 
+fn replacement(original: string, before: string, after: string) -> Result<string, string> {
+    if before.len == 0 { return .Err("Old text must be nonempty.") }
+    at := text.find(original, before).ok_or("Old text no longer matches. Read the file again.")?
+    mut next := at + 1
+    while next < original.len && original[next] >= 128 && original[next] < 192 { next += 1 }
+    if text.contains(original[next..original.len], before) { return .Err("Old text occurs more than once. Include context.") }
+    content := original[0..at] + after + original[at + before.len..original.len]
+    if content.len > 524288 { return .Err("File exceeds 512 KiB.") }
+    .Ok(move content)
+}
+
+@derive(Encode)
+struct FileEdit { tool: string, path: string, old: string, new: string }
+
+pub fn edit_plan(root: string, args: &json.Doc) -> Result<[]string, string> {
+    edits := args.field(args.root, "edits")
+    count := args.count(edits)
+    if args.kind(edits) != .Array || count < 1 || count > 8 { return .Err("Pass 1 to 8 edits.") }
+    mut versions := map.Map<string, string>::new()
+    mut actions: []string = []
+    for i in 0..count {
+        item := args.at(edits, i)
+        name := args.get_str(item, "path").ok_or("Missing edit path.")?
+        file := location(root, name)?
+        before := args.get_str(item, "old").ok_or("Missing old text in " + name)?
+        after := args.get_str(item, "new").ok_or("Missing new text in " + name)?
+        original := match versions.take(file) {
+            .Some(v) => v,
+            .None => match read_file(file) { .Ok(v) => v, .Err(e) => { return .Err(name + ": " + e) }, },
+        }
+        next := match replacement(original, before, after) {
+            .Ok(v) => v,
+            .Err(e) => { return .Err(f"Edit {i + 1} ({name}): " + e) },
+        }
+        versions.put(file.clone(), move next)
+        op := FileEdit { tool: "edit", path: name.clone(), old: before.clone(), new: after.clone() }
+        actions.push(json.to_string(&op).unwrap())
+    }
+    .Ok(move actions)
+}
+
 fn change(file: string, args: &json.Doc, create: bool) -> Result<string, string> {
     mut content := ""
     mut mode := u32(420)
     if create {
         content = args.get_str(args.root, "content").ok_or("Missing content.")?
         if sys.metadata(file).ok { return .Err("File already exists.") }
+        if content.len > 524288 { return .Err("File exceeds 512 KiB.") }
     } else {
         before := args.get_str(args.root, "old").ok_or("Missing old text.")?
         after := args.get_str(args.root, "new").ok_or("Missing new text.")?
         original := read_file(file)?
-        if before.len == 0 { return .Err("Old text must be nonempty.") }
-        at := text.find(original, before).ok_or("Old text no longer matches. Read the file again.")?
-        mut next := at + 1
-        while next < original.len && original[next] >= 128 && original[next] < 192 { next += 1 }
-        if text.contains(original[next..original.len], before) { return .Err("Old text occurs more than once. Include context.") }
-        content = original[0..at] + after + original[at + before.len..original.len]
+        content = replacement(original, before, after)?
         mode = sys.metadata(file).mode.bit_and(511)
     }
-    if content.len > 524288 { return .Err("File exceeds 512 KiB.") }
     parent := path.dirname(file)
     if create && !fs.mkdir_all(parent).ok { return .Err("Could not create parent directory.") }
     mut tmp := match fs.temp_file(parent, ".dunder-edit-") { .Ok(f) => move f, .Err(e) => { return .Err(e.message()) }, }

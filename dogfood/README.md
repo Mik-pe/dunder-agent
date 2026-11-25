@@ -63,6 +63,8 @@ Rapporten visar hur många uppgifter som klarat två av tre försök inom tidsgr
 
 Flerfilsprovet `invoice` kördes en gång per deltagare i en inledande jämförelse mellan Dunder Agent 0.2.0 och OpenCode 2.3.2. Dunder läste tre filer i samma beslut, redigerade två och passerade publika och dolda tester på 145,5 sekunder. OpenCode nådde femminutersgränsen. Den äldre bedömaren sparade inget oberoende filutfall vid timeout. Dessa två försök ingår inte i den låsta serien.
 
+I ett lokalt återspel av samma fakturauppgift användes de läsningar, ersättningstexter och det slutsvar som GLM faktiskt gav i pilotkörningen. Med en redigering per beslut krävdes fyra modellsvar. Med de två redigeringarna samlade i ett beslut behövdes tre. Båda körningarna passerade samma publika och dolda tester. Svaren spelades upp från en lokal server. Mätningen avser antalet beslut.
+
 ## Fynd i Dunder 0.12.1
 
 När filskrivningen skulle översätta ett I/O-fel till text gick `map_err` på `Result<(), E>` inte att kompilera. Följande fristående program reproducerar E3003 vid `dunder build` på macOS ARM64.

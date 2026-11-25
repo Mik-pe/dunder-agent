@@ -184,3 +184,22 @@ fn tool(root: string, args: string) -> Result<string, string> {
         assert(provider.model_ref(name).is_err())
     }
 }
+
+@test fn edit_plan_checks_paths_matches_and_limits_before_writing() {
+    dir := fs.temp_dir("dunder-edit-plan-").value
+    defer { _ := fs.remove_all(dir) }
+    assert(sys.write(path.join(dir, "file"), "ababa").is_ok())
+    assert(fs.symlink("file", path.join(dir, "link")).ok)
+    for raw in [
+        r#"{"edits":[{"path":"link","old":"ababa","new":"x"}]}"#,
+        r#"{"edits":[{"path":"../file","old":"ababa","new":"x"}]}"#,
+        r#"{"edits":[{"path":"file","old":"aba","new":"x"}]}"#,
+        r#"{"edits":[{"path":"file","old":"","new":"x"}]}"#,
+        r#"{"edits":[{"path":"file","old":"ababa"}]}"#,
+        r#"{"edits":[]}"#, r#"{"edits":[1,2,3,4,5,6,7,8,9]}"#,
+    ] {
+        doc := json.Doc::parse_text(raw)
+        assert(workspace.edit_plan(dir, &doc).is_err())
+    }
+    assert(sys.read(path.join(dir, "file")).unwrap() == "ababa")
+}
