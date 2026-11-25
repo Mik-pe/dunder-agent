@@ -30,6 +30,14 @@ Det lokala acceptansprovet skapar en kontroll som skriver 1,7 MB byggutskrift oc
 
 Efter kvotåterställningen den 25 november körde 0.8.0 en separat uppgift med riktig GLM-5.4 `low`. En kontroll av en PNG-exportör skrev 3,1 MB och rapporterade att enheten skulle vara `pixels/metre`. På 17 sekunder körde agenten kontrollen, ändrade en rad i `export.ddr` och fick nästa kontroll grön. En ny kompilering och kontroll i en ren katalog passerade. I 0.9.0 gick sessionens 14 händelser att läsa med `show --jsonl`. Modellen gav sitt slutsvar på kinesiska trots att uppgiften var på engelska.
 
+## En språkskill för sex agenter
+
+En fristående uppgift utgick från en Dunder-funktion som inte gick att kompilera. Den använde `let` för att deklarera lokaler och `str(n)` för att skriva ut ett heltal. Dunder Agent 0.10.0 fick språkets skill med `--skill dunder`. OpenCode 2.3.2 fick samma fil i projektets `.agents/skills/dunder/` och uppmanades att ladda den. I OpenCodes körlogg syns ett slutfört anrop till `skill` med id `dunder`.
+
+Båda använde GLM-5.4 med varianten `low`, ändrade enbart implementationen och körde sin lokala kontroll. I nya kataloger klarade båda två publika och fyra dolda fall, inklusive hela avståndet mellan minsta och största `i32`. Dunder Agent tog 6,5 sekunder och OpenCode 9,8 sekunder i ett försök var. Den låsta jämförelsen körs separat. Ett tidigt utvecklingsprov överlappade OpenCodes första försök med `inflight`. Loggarna arkiverades och försöket kördes om från samma startrevision.
+
+Pi 1.6.0 läste filen från en uttrycklig skill-sökväg. Goose 1.61.0 listade den under `goose skills list`. Kilo Code 7.8.32 returnerade den från sitt lokala skill-API. Med lokal modellfixtur annonserade Cline 3.0.75 skillen och levererade dess innehåll efter ett anrop till sitt eget `skills`-verktyg.
+
 ## Jämför harnessar lokalt
 
 Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Återupptagning med Cline kräver också tmux. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.

@@ -30,6 +30,21 @@ fn reply(req: &http.Request) -> string {
         body_text = envelope.get_str(e, "body").unwrap()
         if last == "user" { task = body_text.clone() }
     }
+    if task == "compile the Dunder example" || task == "open nested Dunder source" {
+        skill := envelope.get_str(envelope.field(envelope.root, "skills"), "dunder")
+        if last == "user" && task == "open nested Dunder source" {
+            assert(skill.is_none())
+            return r#"{"tool":"read_many","paths":["src/counter\u002eddr","note.txt"]}"#
+        }
+        if skill.is_none() { return r#"{"tool":"finish","blocked":true,"answer":"Missing Dunder example."}"# }
+        if !text.starts_with(body_text, "exit 0, signal 0") {
+            blocks := text.split(skill.unwrap(), "```dunder\n")
+            source := text.split(blocks[1], "\n```")[0].clone()
+            code := source + "\n@test fn numbered_label() { assert(numbered(\"åska\", 2147483647) == \"2147483648. åska\") }\n"
+            return r#"{"tool":"create","path":"sample.ddr","content":"# + json.quote(code) + r#","check":true}"#
+        }
+        return r#"{"tool":"finish","answer":"Example compiled and ran."}"#
+    }
     if task == "consult manual" {
         refs := envelope.field(envelope.root, "references")
         assert(envelope.count(refs) == 2 && envelope.as_str(envelope.at(refs, 0)).unwrap() == "language")
@@ -204,6 +219,22 @@ fn check_stdin(app: string, dir: string) {
     assert(fs.list_dir(session_dir).unwrap().len == count)
 }
 
+fn check_dunder_example(app: string, dir: string) {
+    for kind in ["nested", "source", "manifest", "explicit"] {
+        work := path.join(dir, kind)
+        assert(fs.mkdir_all(path.join(work, "src")).ok)
+        file := if kind == "source" { "counter.ddr" } else if kind == "manifest" { "dunder.toml" } else { "src/counter.ddr" }
+        content := if kind == "manifest" { "name = \"demo\"\nversion = \"0.1.0\"\nroot = \"sample.ddr\"\n" } else { "fn counter() -> i32 { 1 }\n" }
+        assert(sys.write(path.join(work, file), content).is_ok())
+        task := if kind == "nested" { "open nested Dunder source" } else { "compile the Dunder example" }
+        mut args: []string = ["--workspace", work.clone(), "--check", "dunder test sample.ddr --offline", "--max-steps", "3", "run", task.clone()]
+        if kind == "explicit" { args.push("--skill"); args.push("dunder") }
+        turn := run(app, dir, args)
+        assert(turn.succeeded() && turn.stdout_text() == "Example compiled and ran.\n")
+        assert(text.contains(turn.stderr_text(), "check exit 0") && text.contains(sys.read(path.join(work, "sample.ddr")).unwrap(), "number.str()"))
+    }
+}
+
 fn main() -> i32 {
     if sys.arg_count() == 3 && sys.arg(1) == "--serve" { return serve(sys.arg(2)) }
     if sys.arg_count() != 2 { _ := sys.eprint("Pass the path to the compiled dunder-agent."); return 2 }
@@ -218,6 +249,10 @@ fn main() -> i32 {
     mut server := cmd.spawn().unwrap()
     defer { _ := server.kill(); _ := server.wait(1000) }
     assert(server.read_stdout_line(5000).unwrap().is_some())
+    exported := run(app, dir, ["skill", "dunder"])
+    assert(exported.succeeded() && exported.stdout_text() == @embed_file(".agents/skills/dunder/SKILL.md") && exported.stderr.len == 0)
+    assert(run(app, dir, ["skill", "absent"]).code == 2 && run(app, dir, ["--skill", "absent", "run", "unused"]).code == 2)
+    check_dunder_example(app, dir)
     check_stdin(app, dir)
     check_transcript(app, dir)
     assert(sys.write(path.join(dir, "level.txt"), "3").is_ok())

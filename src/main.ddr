@@ -26,6 +26,8 @@ const HELP: string = """Dunder Agent
   dunder-agent [--workspace DIR] show SESSION_ID
   --jsonl          Emit JSON Lines for run or show
   dunder-agent mascot
+  dunder-agent skill dunder    Export the portable SKILL.md
+  --skill dunder    Load the Dunder language skill from the first decision
   --plain          Run without the terminal animation
   --model-timeout S  Seconds per model decision (default 140)
   --max-steps N    Decisions per user turn (default 24)
@@ -37,7 +39,7 @@ const HELP: string = """Dunder Agent
 
 enum Inspect { None, Changes, Show }
 
-struct Options { references: []reference.Reference, root: string, model: string, timeout_s: i64, check: string, id: string, steps: i32, prompt: string, batch: bool, list: bool, plain: bool, mascot: bool, inspect: Inspect, jsonl: bool }
+struct Options { dunder_skill: bool, references: []reference.Reference, root: string, model: string, timeout_s: i64, check: string, id: string, steps: i32, prompt: string, batch: bool, list: bool, plain: bool, mascot: bool, inspect: Inspect, jsonl: bool }
 
 fn stdin_task() -> Result<string, string> {
     if io.stdin().is_tty() { return .Err("run - reads a piped UTF-8 task from standard input.") }
@@ -49,7 +51,7 @@ fn stdin_task() -> Result<string, string> {
 }
 
 fn options() -> Result<Options, string> {
-    mut o := Options { references: [], root: ".", model: provider.MODEL, timeout_s: provider.DEFAULT_TIMEOUT, check: "", id: "", steps: 24, prompt: "", batch: false, list: false, plain: false, mascot: false, inspect: .None, jsonl: false }
+    mut o := Options { dunder_skill: false, references: [], root: ".", model: provider.MODEL, timeout_s: provider.DEFAULT_TIMEOUT, check: "", id: "", steps: 24, prompt: "", batch: false, list: false, plain: false, mascot: false, inspect: .None, jsonl: false }
     mut i := 1
     while i < sys.arg_count() {
         name := sys.arg(i)
@@ -62,6 +64,7 @@ fn options() -> Result<Options, string> {
         arg := sys.arg(i)
         i += 1
         match name {
+            "--skill" => { if arg != "dunder" { return .Err("Available skill: dunder") }; o.dunder_skill = true },
             "--reference" => { reference.add(&mut o.references, arg)? },
             "--workspace" => { o.root = arg },
             "--model" => { _ := provider.model_ref(arg)?; o.model = arg },
@@ -133,7 +136,7 @@ fn drive(o: &Options) -> Result<(), string> {
     mut s := ui.Screen {
         run: engine.Run {
             references: o.references.clone(), history: move history, file: file.clone(), scratch: scratch.value.clone(), model: o.model.clone(), model_timeout_s: o.timeout_s, check: o.check.clone(), root_entries: "",
-            interactive: !o.batch, phase: .Idle, child: [], stdout: output.Stream::new(), stderr: output.Stream::new(), since: 0, steps: 0, max_steps: o.steps,
+            interactive: !o.batch, dunder_skill: o.dunder_skill, phase: .Idle, child: [], stdout: output.Stream::new(), stderr: output.Stream::new(), since: 0, steps: 0, max_steps: o.steps,
             needs_check: false, bad_check: false, corrections: 0, pending: "", status: "Ready", failed: false
         },
         input: "", scroll: 0, session_id: id.clone(), motion: !o.plain, elapsed: if o.plain { i64(1100) } else { i64(0) }, rendered_events: -1, reviewing: false, journal: rich.Paragraph::raw("").prepare(1),
@@ -147,7 +150,12 @@ fn drive(o: &Options) -> Result<(), string> {
 }
 
 fn main() -> i32 {
-    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.9.0"); return 0 }
+    if sys.arg_count() >= 2 && sys.arg(1) == "skill" {
+        if sys.arg_count() != 3 || sys.arg(2) != "dunder" { _ := sys.eprint("Usage: dunder-agent skill dunder"); return 2 }
+        mut out := io.stdout()
+        return match io.write_str(&mut out, provider.DUNDER_SKILL) { .Ok => 0, .Err(e) => { _ := sys.eprint(e.message()); 1 }, }
+    }
+    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.10.0"); return 0 }
     if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
     if (sys.arg_count() == 3 || sys.arg_count() == 4) && sys.arg(1) == "--generate" {
         seconds := if sys.arg_count() == 3 { provider.DEFAULT_TIMEOUT } else {

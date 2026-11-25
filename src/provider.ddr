@@ -16,6 +16,7 @@ import .workspace
 import sys
 
 const CONTRACT: string = @embed_file("src/contract.txt")
+pub const DUNDER_SKILL: string = @embed_file(".agents/skills/dunder/SKILL.md")
 const MODEL_FORMAT: string = "Expected provider/model or provider/model#variant."
 pub const DEFAULT_TIMEOUT: i64 = 140
 pub const MODEL: string = "zai-coding-plan/glm-5.4"
@@ -42,7 +43,36 @@ pub fn timed_out(seconds: i64) -> string {
     f"OpenCode model request timed out after {seconds} s."
 }
 
-pub fn launch(dir: string, model: string, timeout_s: i64, check: string, root_entries: string, refs: &[]reference.Reference, interactive: bool, state: &session.Session) -> Result<process.Child, string> {
+fn dunder_file(name: string) -> bool {
+    text.ends_with(name, ".ddr") || path.basename(name) == "dunder.toml"
+}
+
+pub fn dunder_action(action: &json.Doc) -> bool {
+    if action.field(action.root, "reference") >= 0 { return false }
+    tool := action.get_str(action.root, "tool").unwrap_or_default()
+    if tool == "read" || tool == "edit" || tool == "create" {
+        return dunder_file(action.get_str(action.root, "path").unwrap_or_default())
+    }
+    if tool == "read_many" {
+        paths := action.field(action.root, "paths")
+        for i in 0..action.count(paths) {
+            if dunder_file(action.as_str(action.at(paths, i)).unwrap_or_default()) { return true }
+        }
+    }
+    false
+}
+
+pub fn uses_dunder(root_entries: string, state: &session.Session) -> bool {
+    for name in text.split(root_entries, "\n") {
+        if !text.ends_with(name, "/") && dunder_file(name) { return true }
+    }
+    for event in &state.events {
+        if event.kind == "action" && dunder_action(&json.Doc::parse_text(event.body)) { return true }
+    }
+    false
+}
+
+pub fn launch(dir: string, model: string, timeout_s: i64, check: string, root_entries: string, refs: &[]reference.Reference, interactive: bool, dunder_skill: bool, state: &session.Session) -> Result<process.Child, string> {
     rules_file := path.join(state.root, "AGENTS.md")
     mut rules := ""
     if !fs.is_symlink(rules_file) && sys.metadata(rules_file).is_file {
@@ -51,7 +81,8 @@ pub fn launch(dir: string, model: string, timeout_s: i64, check: string, root_en
         rules = instructions.value
     }
     available := reference.names(&refs)
-    input := r#"{"check":"# + json.quote(check) + r#","rootEntriesAtTurnStart":"# + json.quote(root_entries) + r#","interactive":"# + interactive.str() + r#","instructions":"# + json.quote(rules) + r#","references":"# + json.to_string(&available).unwrap() + r#","events":"# + session.context(&state) + "}"
+    skills := if dunder_skill { r#","skills":{"dunder":"# + json.quote(DUNDER_SKILL) + "}" } else { "" }
+    input := r#"{"check":"# + json.quote(check) + r#","rootEntriesAtTurnStart":"# + json.quote(root_entries) + r#","interactive":"# + interactive.str() + r#","instructions":"# + json.quote(rules) + r#","references":"# + json.to_string(&available).unwrap() + skills + r#","events":"# + session.context(&state) + "}"
     ref := model_ref(model)?
     request := r#"{"model":"# + ref + r#","prompt":"# + json.quote(CONTRACT + "\n" + input) + "}"
     file := path.join(dir, "request.json")

@@ -223,6 +223,21 @@ fn tool(root: string, args: string) -> Result<string, string> {
     }
 }
 
+@test fn dunder_skill_follows_workspace_paths_across_turns() {
+    mut state := session.Session { root: ".", events: [] }
+    for raw in [
+        r#"{"tool":"read","path":"demo.ddr","reference":"manual"}"#,
+        r#"{"tool":"search","query":"dunder.toml"}"#,
+        r#"{"tool":"create","path":"README.md","content":"see demo.ddr"}"#,
+    ] {
+        state.events.push(session.Event { kind: "action", body: raw.clone() })
+    }
+    assert(!provider.uses_dunder("demo.ddr/\ndunder.toml.bak", &state))
+    assert(provider.uses_dunder("demo.ddr", &state) && provider.uses_dunder("dunder.toml", &state))
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"read","path":"src/rows\u002eddr"}"# })
+    assert(provider.uses_dunder("src/", &state))
+}
+
 @test fn edit_plan_checks_paths_matches_and_limits_before_writing() {
     dir := fs.temp_dir("dunder-edit-plan-").value
     defer { _ := fs.remove_all(dir) }

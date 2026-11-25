@@ -18,7 +18,7 @@ pub const TASK_TOO_LARGE: string = "Task exceeds 32 KiB."
 pub enum Phase { Idle, Model, Command, Check, Approval }
 pub struct Run {
     references: []reference.Reference, history: session.Session, file: string, scratch: string, model: string, model_timeout_s: i64, check: string, root_entries: string,
-    interactive: bool, phase: Phase, child: []process.Child,
+    interactive: bool, dunder_skill: bool, phase: Phase, child: []process.Child,
     stdout: output.Stream, stderr: output.Stream, since: i64, steps: i32, max_steps: i32,
     needs_check: bool, bad_check: bool, corrections: i32, pending: string, status: string, failed: bool,
 }
@@ -69,7 +69,7 @@ fn start_child(run: &mut Run, move child: process.Child, phase: Phase, status: s
 
 fn request(run: &mut Run) -> Result<(), string> {
     if run.steps >= run.max_steps { return .Err(f"Turn stopped at the {run.max_steps}-decision limit.") }
-    child := provider.launch(run.scratch, run.model, run.model_timeout_s, run.check, run.root_entries, &run.references, run.interactive, &run.history)?
+    child := provider.launch(run.scratch, run.model, run.model_timeout_s, run.check, run.root_entries, &run.references, run.interactive, run.dunder_skill, &run.history)?
     run.steps += 1
     start_child(&mut run, move child, .Model, f"Thinking · {run.steps}/{run.max_steps}")
     .Ok
@@ -89,7 +89,9 @@ pub fn submit(run: &mut Run, message: string) -> Result<(), string> {
     run.corrections = 0
     run.needs_check = run.check != "" && session.requires_check(&run.history)
     run.bad_check = false
-    run.root_entries = workspace.clip(workspace.listing(run.history.root).unwrap_or_default(), 2048)
+    entries := workspace.listing(run.history.root).unwrap_or_default()
+    run.dunder_skill = run.dunder_skill || provider.uses_dunder(entries, &run.history)
+    run.root_entries = workspace.clip(entries, 2048)
     event(&mut run, "user", message)?
     request(&mut run)
 }
@@ -139,6 +141,7 @@ fn write_files(run: &mut Run, action: &json.Doc, raw: string, group: bool) -> Re
     for op in &actions {
         event(&mut run, "action", op)?
         item := json.Doc::parse_text(op)
+        run.dunder_skill = run.dunder_skill || provider.dunder_action(&item)
         match workspace.execute(run.history.root, &item) {
             .Ok(saved) => { run.needs_check = true; event(&mut run, "result", saved)? },
             .Err(reason) => { return result(&mut run, .Err(reason)) },
@@ -150,6 +153,7 @@ fn write_files(run: &mut Run, action: &json.Doc, raw: string, group: bool) -> Re
 
 fn act(run: &mut Run, raw: string) -> Result<(), string> {
     action := json.Doc::parse_text(raw)
+    run.dunder_skill = run.dunder_skill || provider.dunder_action(&action)
     tool := action.get_str(action.root, "tool").unwrap_or_default()
     if action.field(action.root, "reference") >= 0 {
         event(&mut run, "action", raw)?

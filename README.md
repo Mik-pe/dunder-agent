@@ -40,6 +40,19 @@ Vid turens början får agenten rotens filnamn och instruktionerna i `AGENTS.md`
 
 Lokala kommandon får 60 sekunder. Agenten sparar början och slutet av långa loggar från både stdout och stderr. Resultatet i sessionen ryms inom 16 000 byte. Vid en misslyckad kontroll visar CLI:t även ett utdrag på stderr.
 
+### Dunder-skill för kodagenter
+
+Agenten laddar språkets skill när rotens filöversikt visar Dunder-kod eller `dunder.toml`, eller när ett filverktyg arbetar med Dunder-kod längre ned i projektet. Använd `dunder-agent --skill dunder` för att få den från första modellbeslutet, även i ett tomt projekt. Den inbyggda kopian är hämtad från Dunder och innehåller kompileringsprovad syntax för bland annat bindningar, tal, strängar, lån och `Option`. [Versionen som medföljer](https://github.com/Mik-pe/dunder/blob/f93b8a1106442751afbf952a970f14d57bb550b3/.agents/skills/dunder/SKILL.md)
+
+Kör följande i ett projekt för att ge dess andra agenter samma fil.
+
+```sh
+mkdir -p .agents/skills/dunder
+dunder-agent skill dunder > .agents/skills/dunder/SKILL.md
+```
+
+OpenCode, Goose, Cline och Kilo Code hittar katalogen i projektet. Med Pi anger du filen vid start med `pi --skill .agents/skills/dunder/SKILL.md`. [Lokala prov med alla fem](dogfood/README.md#en-språkskill-för-sex-agenter)
+
 ### Lokala referenser
 
 Ge agenten läsåtkomst till dokumentation eller bibliotek som ligger utanför projektet. Sätt `DUNDER_SRC` till katalogen där du har hämtat Dunders källkod och kör
