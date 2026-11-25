@@ -99,7 +99,7 @@ fn drive(o: &Options, scratch: string) -> Result<(), string> {
 }
 
 fn main() -> i32 {
-    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.2.0"); return 0 }
+    if sys.arg_count() == 2 && (sys.arg(1) == "--version" || sys.arg(1) == "-V") { print("dunder-agent 0.2.1"); return 0 }
     if sys.arg_count() == 2 && (sys.arg(1) == "--help" || sys.arg(1) == "-h") { print(HELP); return 0 }
     if sys.arg_count() == 3 && sys.arg(1) == "--generate" {
         return match provider.generate(sys.arg(2)) { .Ok(raw) => { print(raw); 0 }, .Err(e) => { _ := sys.eprint(e); 1 }, }

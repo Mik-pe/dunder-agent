@@ -113,3 +113,24 @@ fn tool(root: string, args: string) -> Result<string, string> {
     assert(tool(dir, r#"{"tool":"read_many","paths":[]}"#).is_err())
     assert(tool(dir, r#"{"tool":"read_many","paths":["a","a","a","a","a","a","a","a","a"]}"#).is_err())
 }
+
+@test fn verification_survives_interruptions_and_ignores_rejected_writes() {
+    mut state := session.Session { root: ".", events: [] }
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"edit"}"# })
+    state.events.push(session.Event { kind: "result", body: "Error: Old text no longer matches. Read the file again." })
+    assert(!session.requires_check(&state))
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"create"}"# })
+    state.events.push(session.Event { kind: "notice", body: "Turn cancelled." })
+    assert(session.requires_check(&state))
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"check"}"# })
+    state.events.push(session.Event { kind: "result", body: "exit 0, signal 0\ngreen" })
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"shell"}"# })
+    state.events.push(session.Event { kind: "result", body: "Error: Command declined by user." })
+    assert(!session.requires_check(&state))
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"shell"}"# })
+    state.events.push(session.Event { kind: "result", body: "Error: Command exceeded its time or output limit." })
+    assert(session.requires_check(&state))
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"check"}"# })
+    state.events.push(session.Event { kind: "result", body: "exit 1, signal 0\nred" })
+    assert(session.requires_check(&state))
+}

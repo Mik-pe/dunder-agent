@@ -30,6 +30,8 @@ fn reply(req: &http.Request) -> string {
         body_text = envelope.get_str(e, "body").unwrap()
         if last == "user" { task = body_text.clone() }
     }
+    if task == "leave pending" { return r#"{"tool":"edit","path":"note.txt","old":"old","new":"unverified"}"# }
+    if task == "continue now" { return r#"{"tool":"finish","answer":"Continued."}"# }
     if task == "one batch" {
         assert(text.contains(envelope.get_str(envelope.root, "rootEntriesAtTurnStart").unwrap(), "note.txt"))
         if last == "user" { return r#"{"tool":"read_many","paths":["note.txt","absent"]}"# }
@@ -119,6 +121,12 @@ fn main() -> i32 {
     assert(!sys.metadata(path.join(dir, "approved.txt")).ok)
     budget := run(app, dir, ["--max-steps", "2", "run", "budget"])
     assert(!budget.succeeded() && text.contains(budget.stderr_text(), "2-decision limit"))
+    assert(sys.write(note, "old").is_ok())
+    pending := run(app, dir, ["--max-steps", "1", "run", "leave pending"])
+    assert(!pending.succeeded() && sys.read(note).unwrap() == "unverified")
+    pending_id := text.split(text.split(pending.stderr_text(), "\n")[0], " ")[1].clone()
+    retry := run(app, dir, ["--resume", pending_id.clone(), "--check", "test \"$(cat note.txt)\" = unverified && printf verified > checked.txt", "run", "continue now"])
+    assert(retry.succeeded() && text.contains(retry.stderr_text(), "check exit 0") && sys.metadata(path.join(dir, "checked.txt")).is_file)
     scratch := path.join(dir, "scratch")
     assert(fs.mkdir_all(scratch).ok)
     mut timed := competitors.command("dunder", app, dir, dir, "wait", "", 1200).unwrap()

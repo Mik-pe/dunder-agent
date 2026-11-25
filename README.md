@@ -31,7 +31,7 @@ I en terminal visar `run` Mullers arbetsstatus på stderr. När utdata omdiriger
 
 Vid turens början får agenten rotens filnamn och instruktionerna i `AGENTS.md`. Den kan läsa upp till åtta relaterade filer i ett modellsteg och köra den angivna kontrollen direkt efter sista redigeringen. Filverktygen använder relativa sökvägar och avvisar symboliska länkar. En redigering kräver en unik träff på den gamla texten. Skrivning publiceras atomärt. Skal och verifieringskommandon körs med användarens vanliga rättigheter i arbetskatalogen.
 
-`--check` gäller den aktuella körningen. Har agenten ändrat en fil körs kontrollen före slutsvaret även om modellen glömmer att begära den. Batchläget ger felkod för bland annat röd slutkontroll, modellfel, blockerat uppdrag och uppnådd stegbudget. Standardgränsen är 24 modellbeslut per tur och kan ändras med `--max-steps`.
+`--check` gäller den aktuella körningen. Har agenten ändrat en fil körs kontrollen före slutsvaret även om modellen glömmer att begära den. Om körningen avbryts efter en skrivning använder nästa tur den sparade historiken för att fånga upp kontrollen. Batchläget ger felkod för bland annat röd slutkontroll, modellfel, blockerat uppdrag och uppnådd stegbudget. Standardgränsen är 24 modellbeslut per tur och kan ändras med `--max-steps`.
 
 ## Modell och historik
 

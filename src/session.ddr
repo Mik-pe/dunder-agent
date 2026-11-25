@@ -54,6 +54,28 @@ pub fn record(state: &mut Session, file: string, kind: string, body: string) -> 
     }
 }
 
+pub fn requires_check(state: &Session) -> bool {
+    mut i := state.events.len
+    while i > 0 {
+        i -= 1
+        event := &state.events[i]
+        if event.kind != "action" { continue }
+        action := json.Doc::parse_text(event.body)
+        tool := action.get_str(action.root, "tool").unwrap_or_default()
+        if tool != "check" && tool != "edit" && tool != "create" && tool != "shell" { continue }
+        if i + 1 >= state.events.len || state.events[i + 1].kind != "result" { return true }
+        result := &state.events[i + 1].body
+        if tool == "check" {
+            if result == "Error: No local check configured." { continue }
+            return !text.starts_with(result, "exit 0, signal 0\n")
+        }
+        if tool == "shell" {
+            if text.starts_with(result, "exit ") || result == "Error: Command exceeded its time or output limit." { return true }
+        } else if result == "Saved." { return true }
+    }
+    false
+}
+
 pub fn context(state: &Session) -> string {
     mut used := 0
     mut start := state.events.len

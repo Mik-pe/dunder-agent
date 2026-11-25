@@ -1,5 +1,5 @@
 name = "dunder-agent"
-version = "0.2.0"
+version = "0.2.1"
 root = "src/main.ddr"
 test_root = "tests/suite.ddr"
 

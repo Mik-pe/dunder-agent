@@ -75,7 +75,7 @@ pub fn submit(run: &mut Run, message: string) -> Result<(), string> {
     run.failed = false
     run.steps = 0
     run.corrections = 0
-    run.needs_check = false
+    run.needs_check = run.check != "" && session.requires_check(&run.history)
     run.bad_check = false
     run.root_entries = workspace.clip(workspace.listing(run.history.root).unwrap_or_default(), 2048)
     event(&mut run, "user", message)?
@@ -181,6 +181,7 @@ pub fn poll(run: &mut Run) -> Result<bool, string> {
     if run.stdout.len + run.stderr.len > 1048576 || clock.monotonic_ms() - run.since >= limit {
         run.children.kill_all()
         if run.phase == .Check { run.needs_check = false; run.bad_check = true }
+        if run.phase == .Command { run.needs_check = true }
         if run.phase != .Model { result(&mut run, .Err("Command exceeded its time or output limit."))?; return .Ok(true) }
         return .Err("OpenCode exceeded its time or output limit.")
     }
