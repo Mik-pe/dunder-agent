@@ -80,6 +80,8 @@ fn main() -> i32 {
     assert(competitors.provider_unavailable("kilo", &output_sample(err, "", 0)))
     assert(!competitors.provider_unavailable("opencode", &output_sample(err + "\n" + r#"{"type":"step_finish"}"#, "", 0)))
     assert(competitors.dunder_failure("Session 1\nOpenCode connection failed (libcurl 28).\n") == "model-timeout")
+    assert(competitors.dunder_failure("OpenCode model request timed out after 230 s.") == "model-timeout")
+    assert(competitors.dunder_failure("OpenCode exceeded its 1 MiB output limit.") == "model-limit")
     assert(!competitors.provider_unavailable("dunder", &output_sample("", "OpenCode connection failed (libcurl 28).", 1)))
     assert(competitors.provider_unavailable("dunder", &output_sample("", "OpenCode HTTP 503 (service): unavailable", 1)))
     print("PASS frozen fixtures, immutable retries, three repetitions, median, independent tree grading, mismatched receipts, provider errors")

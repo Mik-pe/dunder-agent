@@ -36,7 +36,7 @@ Vid turens början får agenten rotens filnamn och instruktionerna i `AGENTS.md`
 
 ## Modell och historik
 
-Dunder äger kontexten, verktygsanropen, avbrotten och historiken. Varje beslut hämtas från OpenCodes lokala `/api/experimental/generate/text` med Dunders HTTP-klient. Standardmodellen är `zai-coding-plan/glm-5.4`. OpenCode använder sin befintliga GLM-inloggning. `--model provider/modell` väljer en annan modell som redan finns i OpenCode. Integrationen är provad mot OpenCode 2.3.2 på IPv4-loopback. [OpenCodes API-kontrakt](https://github.com/anomalyco/opencode/blob/v2.3.2/packages/protocol/src/groups/generate.ts) · [GLM Coding Plan](https://docs.z.ai/devpack/tool/others)
+Dunder äger kontexten, verktygsanropen, avbrotten och historiken. Varje beslut hämtas från OpenCodes lokala `/api/experimental/generate/text` med Dunders HTTP-klient. Standardmodellen är `zai-coding-plan/glm-5.4`. OpenCode använder sin befintliga GLM-inloggning. Med `--model provider/modell` väljer du en modell som redan finns i OpenCode. Ange exempelvis `--model 'zai-coding-plan/glm-5.4#low'` för att välja en registrerad variant. En modellbegäran får 140 sekunder som standard. `--model-timeout 240` ger varje beslut fyra minuter. Integrationen är provad mot OpenCode 2.3.2 på IPv4-loopback. [OpenCodes API-kontrakt](https://github.com/anomalyco/opencode/blob/v2.3.2/packages/protocol/src/groups/generate.ts) · [GLM Coding Plan](https://docs.z.ai/devpack/tool/others)
 
 Sessionerna sparas efter varje händelse under `$XDG_STATE_HOME/dunder-agent`, normalt `~/.local/state/dunder-agent`. De innehåller instruktioner, verktygsresultat och svar och har filrättighet 0600. En session hör till en arbetskatalog och kan öppnas för skrivning av en process åt gången.
 

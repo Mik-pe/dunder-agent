@@ -150,3 +150,16 @@ fn tool(root: string, args: string) -> Result<string, string> {
     s.events.push(session.Event { kind: "action", body: r#"{"tool":"create","path":"interrupted","content":"pending"}"# })
     assert(review.changes(&s) == "create a\n+ one\n+ \n+ two\n\nedit a\n- one\n\ncreate empty")
 }
+
+@test fn model_references_preserve_nested_ids_and_separate_the_variant() {
+    raw := provider.model_ref("fixture/vendor/model#low").unwrap()
+    doc := json.Doc::parse_text(raw)
+    assert(doc.get_str(doc.root, "providerID").unwrap() == "fixture")
+    assert(doc.get_str(doc.root, "id").unwrap() == "vendor/model")
+    assert(doc.get_str(doc.root, "variant").unwrap() == "low")
+    base := json.Doc::parse_text(provider.model_ref(provider.MODEL).unwrap())
+    assert(base.get_str(base.root, "id").unwrap() == "glm-5.4" && base.get_str(base.root, "variant").is_none())
+    for name in ["model", "/model", "provider/", "provider/#low", "provider/model#", "provider/model#low#high", "prov#x/model"] {
+        assert(provider.model_ref(name).is_err())
+    }
+}

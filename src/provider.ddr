@@ -2,20 +2,46 @@ capability filesystem, process, network, stdio
 import http_client
 import std.base64 as base64
 import std.bytes as bytes
+import std.cmp as cmp
 import std.fs as fs
 import std.json as json
 import std.path as path
 import std.parse as parse
 import std.process as process
 import std.text as text
+import std.time as clock
 import .session
 import .workspace
 import sys
 
 const CONTRACT: string = @embed_file("src/contract.txt")
+const MODEL_FORMAT: string = "Expected provider/model or provider/model#variant."
+pub const DEFAULT_TIMEOUT: i64 = 140
 pub const MODEL: string = "zai-coding-plan/glm-5.4"
 
-pub fn launch(dir: string, model: string, check: string, root_entries: string, interactive: bool, state: &session.Session) -> Result<process.Child, string> {
+pub fn model_ref(model: string) -> Result<string, string> {
+    slash := text.find(model, "/").ok_or(MODEL_FORMAT)?
+    provider := model[0..slash]
+    if provider == "" || text.contains(provider, "#") { return .Err(MODEL_FORMAT) }
+    rest := model[slash + 1..model.len]
+    parts := text.split(rest, "#")
+    if parts.len == 0 || parts.len > 2 || parts[0] == "" || (parts.len == 2 && parts[1] == "") { return .Err(MODEL_FORMAT) }
+    mut encoded := r#"{"providerID":"# + json.quote(provider) + r#","id":"# + json.quote(parts[0])
+    if parts.len == 2 { encoded += r#","variant":"# + json.quote(parts[1]) }
+    .Ok(encoded + "}")
+}
+
+pub fn timeout_seconds(arg: string) -> Result<i64, string> {
+    parsed := parse.i64_range(arg, 0, arg.len)
+    if !parsed.ok || parsed.value < 1 || parsed.value > 2147483647 { return .Err("Expected a positive model timeout in seconds (up to 2147483647).") }
+    .Ok(parsed.value)
+}
+
+pub fn timed_out(seconds: i64) -> string {
+    f"OpenCode model request timed out after {seconds} s."
+}
+
+pub fn launch(dir: string, model: string, timeout_s: i64, check: string, root_entries: string, interactive: bool, state: &session.Session) -> Result<process.Child, string> {
     rules_file := path.join(state.root, "AGENTS.md")
     mut rules := ""
     if !fs.is_symlink(rules_file) && sys.metadata(rules_file).is_file {
@@ -24,12 +50,11 @@ pub fn launch(dir: string, model: string, check: string, root_entries: string, i
         rules = instructions.value
     }
     input := r#"{"check":"# + json.quote(check) + r#","rootEntriesAtTurnStart":"# + json.quote(root_entries) + r#","interactive":"# + interactive.str() + r#","instructions":"# + json.quote(rules) + r#","events":"# + session.context(&state) + "}"
-    parts := text.split(model, "/")
-    if parts.len != 2 || parts[0] == "" || parts[1] == "" { return .Err("Expected provider/model.") }
-    request := r#"{"model":{"providerID":"# + json.quote(parts[0]) + r#","id":"# + json.quote(parts[1]) + r#"},"prompt":"# + json.quote(CONTRACT + "\n" + input) + "}"
+    ref := model_ref(model)?
+    request := r#"{"model":"# + ref + r#","prompt":"# + json.quote(CONTRACT + "\n" + input) + "}"
     file := path.join(dir, "request.json")
     workspace.io_status(fs.write_private_text_atomic(file, request))?
-    mut cmd := process.Command::new(sys.arg(0), ["--generate", file])
+    mut cmd := process.Command::new(sys.arg(0), ["--generate", file, timeout_s.str()])
     cmd.set_env("NO_PROXY", "*")
     cmd.set_env("no_proxy", "*")
     match cmd.spawn() { .Ok(c) => .Ok(move c), .Err(e) => .Err(e.message()), }
@@ -43,7 +68,7 @@ pub fn local_url(url: string) -> bool {
     port.ok && port.value > 0 && port.value <= 65535
 }
 
-fn request(body: &[]u8, registration: string) -> Result<http_client.Response, string> {
+fn request(body: &[]u8, registration: string, remaining_ms: i64) -> Result<http_client.Response, string> {
     data := sys.read_text_limit(registration, 8192)
     if !data.ok { return .Err("OpenCode service registration unavailable.") }
     service := json.Doc::parse_text(data.value)
@@ -56,10 +81,11 @@ fn request(body: &[]u8, registration: string) -> Result<http_client.Response, st
         names.push("Authorization")
         values.push("Basic " + base64.encode(&bytes.from_text("opencode:" + password)))
     }
-    .Ok(http_client.request("POST", url + "/api/experimental/generate/text", &names, &values, &body, 140000, 1048576))
+    .Ok(http_client.request("POST", url + "/api/experimental/generate/text", &names, &values, &body, remaining_ms, 1048576))
 }
 
-pub fn generate(file: string) -> Result<string, string> {
+pub fn generate(file: string, timeout_s: i64) -> Result<string, string> {
+    deadline := clock.monotonic_ms() + timeout_s * 1000
     body := sys.read_u8_limit(file, 1048576)
     if !body.ok { return .Err("Could not read model request.") }
     base := process.env_or("XDG_STATE_HOME", path.join(process.env_or("HOME", ""), ".local/state"))
@@ -67,12 +93,19 @@ pub fn generate(file: string) -> Result<string, string> {
     for attempt in 0..2 {
         if attempt == 1 {
             mut cmd := process.Command::new("opencode", ["service", "start"])
-            cmd.set_timeout(12000)
-            if !cmd.exec().succeeded() { return .Err("Could not start the local OpenCode service.") }
+            left := deadline - clock.monotonic_ms()
+            if left <= 0 { return .Err(timed_out(timeout_s)) }
+            cmd.set_timeout(cmp.min<i64>(12000, left))
+            launched := cmd.exec()
+            if launched.timed_out && clock.monotonic_ms() >= deadline { return .Err(timed_out(timeout_s)) }
+            if !launched.succeeded() { return .Err("Could not start the local OpenCode service.") }
         }
         if !sys.metadata(reg).is_file { continue }
-        response := request(&body.value, reg)?
+        left := deadline - clock.monotonic_ms()
+        if left <= 0 { return .Err(timed_out(timeout_s)) }
+        response := request(&body.value, reg, left)?
         if !response.ok {
+            if response.transport_code == 28 { return .Err(timed_out(timeout_s)) }
             if attempt == 0 && response.transport_code == 7 { continue }
             return .Err(f"OpenCode connection failed (libcurl {response.transport_code}).")
         }

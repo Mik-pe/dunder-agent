@@ -12,7 +12,7 @@ import sys
 
 pub enum Phase { Idle, Model, Command, Check, Approval }
 pub struct Run {
-    history: session.Session, file: string, scratch: string, model: string, check: string, root_entries: string,
+    history: session.Session, file: string, scratch: string, model: string, model_timeout_s: i64, check: string, root_entries: string,
     interactive: bool, phase: Phase, children: process.ChildSet, slot: i32,
     stdout: []u8, stderr: []u8, since: i64, steps: i32, max_steps: i32,
     needs_check: bool, bad_check: bool, corrections: i32, pending: string, status: string, failed: bool,
@@ -62,7 +62,7 @@ fn start_child(run: &mut Run, move child: process.Child, phase: Phase, status: s
 
 fn request(run: &mut Run) -> Result<(), string> {
     if run.steps >= run.max_steps { return .Err(f"Turn stopped at the {run.max_steps}-decision limit.") }
-    child := provider.launch(run.scratch, run.model, run.check, run.root_entries, run.interactive, &run.history)?
+    child := provider.launch(run.scratch, run.model, run.model_timeout_s, run.check, run.root_entries, run.interactive, &run.history)?
     run.steps += 1
     start_child(&mut run, move child, .Model, f"Thinking · {run.steps}/{run.max_steps}")
     .Ok
@@ -177,13 +177,15 @@ pub fn stop(run: &mut Run, reason: string) {
 pub fn poll(run: &mut Run) -> Result<bool, string> {
     if run.phase != .Model && run.phase != .Command && run.phase != .Check { return .Ok(false) }
     waited := run.children.try_wait(run.slot, &mut run.stdout, &mut run.stderr)
-    limit := if run.phase == .Model { i64(150000) } else { i64(60000) }
-    if run.stdout.len + run.stderr.len > 1048576 || clock.monotonic_ms() - run.since >= limit {
+    limit := if run.phase == .Model { run.model_timeout_s * 1000 + 1000 } else { i64(60000) }
+    oversized := run.stdout.len + run.stderr.len > 1048576
+    if oversized || (!waited.exited && clock.monotonic_ms() - run.since >= limit) {
         run.children.kill_all()
         if run.phase == .Check { run.needs_check = false; run.bad_check = true }
         if run.phase == .Command { run.needs_check = true }
         if run.phase != .Model { result(&mut run, .Err("Command exceeded its time or output limit."))?; return .Ok(true) }
-        return .Err("OpenCode exceeded its time or output limit.")
+        if oversized { return .Err("OpenCode exceeded its 1 MiB output limit.") }
+        return .Err(provider.timed_out(run.model_timeout_s))
     }
     if !waited.ok { return .Err("Could not wait for child process.") }
     if !waited.exited { return .Ok(false) }

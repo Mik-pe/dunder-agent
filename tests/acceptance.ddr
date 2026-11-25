@@ -16,7 +16,7 @@ fn reply(req: &http.Request) -> string {
     auth := "Basic " + base64.encode(&bytes.from_text("opencode:fixture"))
     assert(http.header(&req, "authorization") == auth)
     body := json.Doc::parse_text(bytes.decode(&req.body).unwrap())
-    assert(body.get_str(body.field(body.root, "model"), "id").unwrap() == "glm-5.4")
+    ref := body.field(body.root, "model")
     prompt := body.get_str(body.root, "prompt").unwrap()
     at := text.find(prompt, "\n{\"check\":").unwrap() + 1
     envelope := json.Doc::parse_text(prompt[at..prompt.len])
@@ -30,6 +30,11 @@ fn reply(req: &http.Request) -> string {
         body_text = envelope.get_str(e, "body").unwrap()
         if last == "user" { task = body_text.clone() }
     }
+    if task == "model variant" {
+        assert(body.get_str(ref, "providerID").unwrap() == "fixture" && body.get_str(ref, "id").unwrap() == "vendor/model" && body.get_str(ref, "variant").unwrap() == "low")
+        return r#"{"tool":"finish","answer":"Variant received."}"#
+    }
+    assert(body.get_str(ref, "id").unwrap() == "glm-5.4" && body.get_str(ref, "variant").is_none())
     if task == "leave pending" { return r#"{"tool":"edit","path":"note.txt","old":"old","new":"unverified"}"# }
     if task == "continue now" { return r#"{"tool":"finish","answer":"Continued."}"# }
     if task == "one batch" {
@@ -49,6 +54,7 @@ fn reply(req: &http.Request) -> string {
         return r#"{"tool":"finish","answer":"Resumed."}"#
     }
     if task == "blocked" { return r#"{"tool":"finish","blocked":true,"answer":"Missing input."}"# }
+    if task == "slow reply" { sys.sleep_ms(1500); return r#"{"tool":"finish","answer":"Slow."}"# }
     if task == "wait" { sys.sleep_ms(12000); return r#"{"tool":"finish","answer":"Done."}"# }
     if task == "budget" { return r#"{"tool":"list","path":"."}"# }
     if task == "shell" {
@@ -99,6 +105,10 @@ fn main() -> i32 {
     mut server := cmd.spawn().unwrap()
     defer { _ := server.kill(); _ := server.wait(1000) }
     assert(server.read_stdout_line(5000).unwrap().is_some())
+    selected := run(app, dir, ["--model", "fixture/vendor/model#low", "run", "model variant"])
+    assert(selected.succeeded() && selected.stdout_text() == "Variant received.\n")
+    rejected := run(app, dir, ["--model", "fixture/m#", "run", "unreachable"])
+    assert(rejected.code == 2 && !text.contains(rejected.stderr_text(), "Session "))
     note := path.join(dir, "note.txt")
     assert(sys.write(note, "old").is_ok())
     batched := run(app, dir, ["--check", "test \"$(cat note.txt)\" = checked", "--max-steps", "3", "run", "one batch"])
@@ -130,6 +140,14 @@ fn main() -> i32 {
     pending_id := text.split(text.split(pending.stderr_text(), "\n")[0], " ")[1].clone()
     retry := run(app, dir, ["--resume", pending_id.clone(), "--check", "test \"$(cat note.txt)\" = unverified && printf verified > checked.txt", "run", "continue now"])
     assert(retry.succeeded() && text.contains(retry.stderr_text(), "check exit 0") && sys.metadata(path.join(dir, "checked.txt")).is_file)
+    timed_model := run(app, dir, ["--model-timeout", "1", "run", "slow reply"])
+    assert(!timed_model.succeeded() && text.contains(timed_model.stderr_text(), "model request timed out after 1 s."))
+    allowed_model := run(app, dir, ["--model-timeout", "4", "run", "slow reply"])
+    assert(allowed_model.succeeded() && allowed_model.stdout_text() == "Slow.\n")
+    for value in ["0", "-1", "4s", "2147483648"] {
+        invalid := run(app, dir, ["--model-timeout", value.clone(), "run", "unused"])
+        assert(invalid.code == 2 && !text.contains(invalid.stderr_text(), "Session "))
+    }
     scratch := path.join(dir, "scratch")
     assert(fs.mkdir_all(scratch).ok)
     mut timed := competitors.command("dunder", app, dir, dir, "wait", "", 1200).unwrap()
@@ -138,6 +156,6 @@ fn main() -> i32 {
     expired := timed.exec()
     assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
     assert(fs.list_dir(scratch).unwrap().len == 0)
-    print("PASS mascot, CLI help, pipe output, edit, automatic check, resume, failed check, shell permission, decision budget, deadline cancellation")
+    print("PASS mascot, CLI help, pipe output, edit, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
     0
 }

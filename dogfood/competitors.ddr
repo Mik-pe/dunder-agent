@@ -142,9 +142,9 @@ pub fn dunder_failure(stderr: string) -> string {
     lines := text.split(text.trim(stderr), "\n")
     if lines.len == 0 { return "" }
     last := &lines[lines.len - 1]
-    if last == "OpenCode connection failed (libcurl 28)." { return "model-timeout" }
+    if last == "OpenCode connection failed (libcurl 28)." || (text.starts_with(last, "OpenCode model request timed out after ") && text.ends_with(last, " s.")) { return "model-timeout" }
     if text.starts_with(last, "Turn stopped at the ") && text.ends_with(last, "-decision limit.") { return "decision-limit" }
-    if last == "OpenCode exceeded its time or output limit." { return "model-limit" }
+    if last == "OpenCode exceeded its time or output limit." || last == "OpenCode exceeded its 1 MiB output limit." { return "model-limit" }
     if last == "Local check failed" || last == "Task blocked" { return "task-incomplete" }
     ""
 }
