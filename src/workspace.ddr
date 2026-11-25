@@ -134,6 +134,7 @@ pub fn edit_plan(root: string, args: &json.Doc) -> Result<[]string, string> {
     mut actions: []string = []
     for i in 0..count {
         item := args.at(edits, i)
+        if args.field(item, "reference") >= 0 { return .Err("Reference directories are read-only.") }
         name := args.get_str(item, "path").ok_or("Missing edit path.")?
         file := location(root, name)?
         before := args.get_str(item, "old").ok_or("Missing old text in " + name)?

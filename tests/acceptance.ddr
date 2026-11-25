@@ -30,6 +30,26 @@ fn reply(req: &http.Request) -> string {
         body_text = envelope.get_str(e, "body").unwrap()
         if last == "user" { task = body_text.clone() }
     }
+    if task == "consult manual" {
+        refs := envelope.field(envelope.root, "references")
+        assert(envelope.count(refs) == 2 && envelope.as_str(envelope.at(refs, 0)).unwrap() == "language")
+        if last == "user" { return r#"{"tool":"check"}"# }
+        if text.contains(body_text, "unknown local 'let'") { return r#"{"tool":"search","reference":"language","query":"a new binding"}"# }
+        if text.contains(body_text, "syntax.md:") { return r#"{"tool":"read","reference":"language","path":"syntax.md"}"# }
+        if text.starts_with(body_text, "Create a new binding") { return r#"{"tool":"edit","path":"scratch.ddr","old":"let result = 40","new":"result := 40","check":true}"# }
+        assert(text.starts_with(body_text, "exit 0, signal 0"))
+        return r#"{"tool":"finish","answer":"Compiler passed."}"#
+    }
+    if task == "try closed manual" {
+        if last == "user" { return r#"{"tool":"read","reference":"language","path":"syntax.md"}"# }
+        assert(text.contains(body_text, "Unknown reference"))
+        return r#"{"tool":"finish","answer":"Reference is closed."}"#
+    }
+    if task == "reference write" {
+        if last == "user" { return r#"{"tool":"edit","reference":"language","path":"syntax.md","old":"shared","new":"wrong"}"# }
+        assert(text.contains(body_text, "read-only"))
+        return r#"{"tool":"finish","answer":"Write rejected."}"#
+    }
     if task == "model variant" {
         assert(body.get_str(ref, "providerID").unwrap() == "fixture" && body.get_str(ref, "id").unwrap() == "vendor/model" && body.get_str(ref, "variant").unwrap() == "low")
         return r#"{"tool":"finish","answer":"Variant received."}"#
@@ -121,6 +141,22 @@ fn main() -> i32 {
     assert(selected.succeeded() && selected.stdout_text() == "Variant received.\n")
     rejected := run(app, dir, ["--model", "fixture/m#", "run", "unreachable"])
     assert(rejected.code == 2 && !text.contains(rejected.stderr_text(), "Session "))
+    manual := fs.temp_dir("dunder-manual-").value
+    defer { _ := fs.remove_all(manual) }
+    doc := path.join(manual, "syntax.md")
+    assert(sys.write(doc, "Create a new binding with name := value. shared").is_ok())
+    assert(sys.write(path.join(dir, "syntax.md"), "shared").is_ok())
+    code := path.join(dir, "scratch.ddr")
+    assert(sys.write(code, "fn main() { let result = 40; assert(result + 2 == 42) }").is_ok())
+    consulted := run(app, dir, ["--reference", "language=" + manual, "--reference", "other=" + manual, "--check", "dunder check scratch.ddr --offline --locked", "run", "consult manual"])
+    assert(consulted.succeeded() && consulted.stdout_text() == "Compiler passed.\n")
+    assert(text.contains(consulted.stderr_text(), "read [language] syntax.md") && text.contains(sys.read(code).unwrap(), "result := 40"))
+    consult_id := text.split(text.split(consulted.stderr_text(), "\n")[0], " ")[1].clone()
+    closed := run(app, dir, ["--resume", consult_id, "run", "try closed manual"])
+    assert(closed.succeeded() && closed.stdout_text() == "Reference is closed.\n")
+    protected := run(app, dir, ["--reference", "language=" + manual, "run", "reference write"])
+    assert(protected.succeeded() && protected.stdout_text() == "Write rejected.\n")
+    assert(sys.read(doc).unwrap() == "Create a new binding with name := value. shared" && sys.read(path.join(dir, "syntax.md")).unwrap() == "shared")
     note := path.join(dir, "note.txt")
     assert(sys.write(note, "first").is_ok())
     second := path.join(dir, "b.txt")
@@ -181,6 +217,6 @@ fn main() -> i32 {
     expired := timed.exec()
     assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
     assert(fs.list_dir(scratch).unwrap().len == 0)
-    print("PASS mascot, CLI help, pipe output, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
+    print("PASS mascot, CLI help, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
     0
 }

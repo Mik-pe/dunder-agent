@@ -1,0 +1,43 @@
+capability filesystem, process
+import std.fs as fs
+import std.json as json
+import std.text as text
+import .workspace
+import sys
+
+pub struct Reference { name: string, root: string }
+
+pub fn add(refs: &mut []Reference, spec: string) -> Result<(), string> {
+    at := text.find(spec, "=").ok_or("Expected --reference NAME=DIR.")?
+    name := spec[0..at]
+    if name == "" || at + 1 == spec.len { return .Err("Expected --reference NAME=DIR.") }
+    for b in name.bytes() {
+        if !(b >= b'a' && b <= b'z' || b >= b'A' && b <= b'Z' || b >= b'0' && b <= b'9' || b == b'-' || b == b'_') {
+            return .Err("Use letters, digits, hyphens or underscores in a reference name.")
+        }
+    }
+    for item in &refs { if item.name == name { return .Err("Duplicate reference: " + name) } }
+    root := fs.realpath(spec[at + 1..spec.len])
+    if !root.ok || !sys.metadata(root.value).is_dir { return .Err("Reference is not a directory: " + name) }
+    refs.push(Reference { name: name.clone(), root: root.value.clone() })
+    .Ok
+}
+
+pub fn names(refs: &[]Reference) -> []string {
+    mut out: []string = []
+    for item in &refs { out.push(item.name.clone()) }
+    out
+}
+
+pub fn inspect(refs: &[]Reference, action: &json.Doc) -> Result<string, string> {
+    name := action.get_str(action.root, "reference").ok_or("Expected a reference name.")?
+    tool := action.get_str(action.root, "tool").unwrap_or_default()
+    if tool != "list" && tool != "search" && tool != "read" && tool != "read_many" { return .Err("Reference directories are read-only.") }
+    for item in &refs {
+        if item.name != name { continue }
+        root := fs.realpath(item.root)
+        if !root.ok || root.value != item.root || !sys.metadata(item.root).is_dir { return .Err("Reference directory is unavailable: " + name) }
+        return workspace.execute(item.root, &action)
+    }
+    .Err("Unknown reference: " + name)
+}

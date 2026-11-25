@@ -1,5 +1,6 @@
 capability filesystem, process
 import ..src.workspace
+import ..src.reference
 import ..src.review
 import ..src.session
 import ..src.provider
@@ -202,4 +203,33 @@ fn tool(root: string, args: string) -> Result<string, string> {
         assert(workspace.edit_plan(dir, &doc).is_err())
     }
     assert(sys.read(path.join(dir, "file")).unwrap() == "ababa")
+}
+
+@test fn references_preserve_the_directory_boundary_and_reject_ambiguous_names() {
+    dir := fs.temp_dir("dunder-references-").value
+    defer { _ := fs.remove_all(dir) }
+    docs := path.join(dir, "docs=example")
+    assert(fs.mkdir_all(docs).ok)
+    assert(sys.write(path.join(docs, "entry"), "manual").is_ok())
+    assert(sys.write(path.join(dir, "outside"), "outside").is_ok())
+    assert(fs.symlink("../outside", path.join(docs, "link")).ok)
+    mut refs: []reference.Reference = []
+    assert(reference.add(&mut refs, "manual=" + docs).is_ok())
+    for invalid in ["manual=" + dir, "two names=" + docs, "=empty", "missing", "name=", "file=" + path.join(dir, "outside")] {
+        assert(reference.add(&mut refs, invalid).is_err())
+    }
+    list := json.Doc::parse_text(r#"{"tool":"list","reference":"manual","path":"."}"#)
+    assert(reference.inspect(&refs, &list).unwrap() == "entry")
+    read := json.Doc::parse_text(r#"{"tool":"read_many","reference":"manual","paths":["entry","../outside","link"]}"#)
+    result := json.Doc::parse_text(reference.inspect(&refs, &read).unwrap())
+    assert(result.get_str(result.at(result.root, 0), "content").unwrap() == "manual")
+    assert(result.get_str(result.at(result.root, 1), "error").is_some() && result.get_str(result.at(result.root, 2), "error").is_some())
+    for name in ["edit", "edit_many", "create", "shell", "check"] {
+        command := json.Doc::parse_text(r#"{"reference":"manual","tool":"# + json.quote(name) + "}")
+        assert(reference.inspect(&refs, &command).is_err())
+    }
+    batch := json.Doc::parse_text(r#"{"edits":[{"reference":"manual","path":"entry","old":"manual","new":"wrong"}]}"#)
+    assert(workspace.edit_plan(docs, &batch).is_err())
+    assert(sys.rename(docs, path.join(dir, "original")).ok && fs.symlink(dir, docs).ok)
+    assert(reference.inspect(&refs, &list).is_err())
 }

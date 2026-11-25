@@ -34,6 +34,16 @@ Vid turens början får agenten rotens filnamn och instruktionerna i `AGENTS.md`
 
 `--check` gäller den aktuella körningen. Har agenten ändrat en fil körs kontrollen före slutsvaret även om modellen glömmer att begära den. Om körningen avbryts efter en skrivning använder nästa tur den sparade historiken för att fånga upp kontrollen. Batchläget ger felkod för bland annat röd slutkontroll, modellfel, blockerat uppdrag och uppnådd stegbudget. Standardgränsen är 24 modellbeslut per tur och kan ändras med `--max-steps`.
 
+### Lokala referenser
+
+Ge agenten läsåtkomst till dokumentation eller bibliotek som ligger utanför projektet. Sätt `DUNDER_SRC` till katalogen där du har hämtat Dunders källkod och kör
+
+```sh
+dunder-agent --reference "dunder=$DUNDER_SRC/docs" --reference "std=$DUNDER_SRC/stdlib" --check 'dunder test' run 'Rätta kompileringsfelet och verifiera ändringen'
+```
+
+Modellen ser referensernas namn och kan lista, söka och läsa i dem. Verktygsloggen visar namnet vid varje uppslag. Samma flaggor fungerar i TUI:t. Ange referenserna igen vid `--resume` för att ge den nya körningen tillgång till katalogerna.
+
 ## Modell och historik
 
 Dunder äger kontexten, verktygsanropen, avbrotten och historiken. Varje beslut hämtas från OpenCodes lokala `/api/experimental/generate/text` med Dunders HTTP-klient. Standardmodellen är `zai-coding-plan/glm-5.4`. OpenCode använder sin befintliga GLM-inloggning. Med `--model provider/modell` väljer du en modell som redan finns i OpenCode. Ange exempelvis `--model 'zai-coding-plan/glm-5.4#low'` för att välja en registrerad variant. En modellbegäran får 140 sekunder som standard. `--model-timeout 240` ger varje beslut fyra minuter. Integrationen är provad mot OpenCode 2.3.2 på IPv4-loopback. [OpenCodes API-kontrakt](https://github.com/anomalyco/opencode/blob/v2.3.2/packages/protocol/src/groups/generate.ts) · [GLM Coding Plan](https://docs.z.ai/devpack/tool/others)

@@ -5,6 +5,7 @@ Choose one action:
 {"tool":"search","query":"literal"} searches the work tree with ripgrep.
 {"tool":"read","path":"src/file","offset":0} reads text starting at an optional UTF-8 byte offset. A response is limited to 16000 bytes.
 {"tool":"read_many","paths":["src/file","tests/file"]} reads up to eight related files in one decision. Each result contains up to 4096 bytes or a per-file error. Continue long files with read. Use this when implementation and tests are already visible in the listing.
+For list, search, read or read_many, add "reference":"name" to inspect a read-only directory offered by the user in references. Paths are relative to that directory. Consult relevant reference material for unfamiliar syntax or APIs. Without reference, tools use the workspace.
 {"tool":"edit","path":"src/file","old":"exact unique text","new":"replacement"} replaces one occurrence. Read the file first.
 {"tool":"edit_many","edits":[{"path":"a","old":"exact old text","new":"replacement"},{"path":"b","old":"exact old text","new":"replacement"}],"check":true} applies 1 to 8 edits in order. Use it when several edits are known from the files you read. All matches are checked first, including dependent edits to one file. Every saved edit is recorded separately. If a write fails, inspect the results before retrying.
 {"tool":"create","path":"src/file","content":"full text"} exclusively creates a file and missing directories.

@@ -6,13 +6,14 @@ import std.process as process
 import std.text as text
 import std.time as clock
 import .provider
+import .reference
 import .session
 import .workspace
 import sys
 
 pub enum Phase { Idle, Model, Command, Check, Approval }
 pub struct Run {
-    history: session.Session, file: string, scratch: string, model: string, model_timeout_s: i64, check: string, root_entries: string,
+    references: []reference.Reference, history: session.Session, file: string, scratch: string, model: string, model_timeout_s: i64, check: string, root_entries: string,
     interactive: bool, phase: Phase, children: process.ChildSet, slot: i32,
     stdout: []u8, stderr: []u8, since: i64, steps: i32, max_steps: i32,
     needs_check: bool, bad_check: bool, corrections: i32, pending: string, status: string, failed: bool,
@@ -31,6 +32,8 @@ pub fn safe(s: string) -> string {
 
 pub fn label(action: &json.Doc) -> string {
     name := action.get_str(action.root, "tool").unwrap_or("?")
+    ref := action.get_str(action.root, "reference").unwrap_or_default()
+    label := if ref == "" { name.clone() } else { name + " [" + ref + "]" }
     if name == "read_many" {
         nodes := action.field(action.root, "paths")
         mut names: []string = []
@@ -38,11 +41,11 @@ pub fn label(action: &json.Doc) -> string {
             if i >= 8 { break }
             names.push(action.as_str(action.at(nodes, i)).unwrap_or("?"))
         }
-        return name + " " + workspace.clip(array.join(&names, ", "), 240)
+        return label + " " + workspace.clip(array.join(&names, ", "), 240)
     }
     detail := action.get_str(action.root, "path").unwrap_or(action.get_str(action.root, "query").unwrap_or(action.get_str(action.root, "command").unwrap_or_default()))
-    if detail == "" { return name }
-    name + " " + detail
+    if detail == "" { return label }
+    label + " " + detail
 }
 
 pub fn event(run: &mut Run, kind: string, body: string) -> Result<(), string> {
@@ -62,7 +65,7 @@ fn start_child(run: &mut Run, move child: process.Child, phase: Phase, status: s
 
 fn request(run: &mut Run) -> Result<(), string> {
     if run.steps >= run.max_steps { return .Err(f"Turn stopped at the {run.max_steps}-decision limit.") }
-    child := provider.launch(run.scratch, run.model, run.model_timeout_s, run.check, run.root_entries, run.interactive, &run.history)?
+    child := provider.launch(run.scratch, run.model, run.model_timeout_s, run.check, run.root_entries, &run.references, run.interactive, &run.history)?
     run.steps += 1
     start_child(&mut run, move child, .Model, f"Thinking · {run.steps}/{run.max_steps}")
     .Ok
@@ -139,6 +142,10 @@ fn write_files(run: &mut Run, action: &json.Doc, raw: string, group: bool) -> Re
 fn act(run: &mut Run, raw: string) -> Result<(), string> {
     action := json.Doc::parse_text(raw)
     tool := action.get_str(action.root, "tool").unwrap_or_default()
+    if action.field(action.root, "reference") >= 0 {
+        event(&mut run, "action", raw)?
+        return result(&mut run, reference.inspect(&run.references, &action))
+    }
     if tool == "finish" {
         answer := action.get_str(action.root, "answer").unwrap_or_default()
         if text.trim(answer) == "" { return result(&mut run, .Err("A finish action needs a nonempty answer.")) }
