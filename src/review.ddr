@@ -1,13 +1,26 @@
 capability filesystem, process
 import std.array as array
 import std.json as json
+import std.bytes as bytes
 import std.text as text
 import .session
+
+pub fn visible(value: string) -> string {
+    mut out: []u8 = []
+    for c in value.runes() {
+        n := i32(c)
+        if n == 13 { bytes.append_utf8(&mut out, "\\r") }
+        else if n != 9 && n != 10 && (n < 32 || (n >= 127 && n <= 159)) {
+            bytes.append_utf8(&mut out, "\\x" + bytes.hex_u8(&[u8(n)]))
+        } else { bytes.append_utf8(&mut out, c.str()) }
+    }
+    bytes.decode(&out).unwrap()
+}
 
 fn lines(out: &mut []string, prefix: string, snippet: string) {
     if snippet == "" { return }
     end := if text.ends_with(snippet, "\n") { snippet.len - 1 } else { snippet.len }
-    out.push(prefix + text.replace(snippet[0..end], "\n", "\n" + prefix))
+    out.push(prefix + text.replace(visible(snippet[0..end]), "\n", "\n" + prefix))
 }
 
 pub fn changes(state: &session.Session) -> string {
@@ -22,11 +35,19 @@ pub fn changes(state: &session.Session) -> string {
         if tool != "edit" && tool != "create" { continue }
         file := action.get_str(action.root, "path").unwrap_or_default()
         if out.len > 0 { out.push("") }
-        out.push(tool + " " + file)
-        if tool == "create" { lines(&mut out, "+ ", action.get_str(action.root, "content").unwrap_or_default()) }
-        else {
-            lines(&mut out, "- ", action.get_str(action.root, "old").unwrap_or_default())
-            lines(&mut out, "+ ", action.get_str(action.root, "new").unwrap_or_default())
+        out.push(tool + " " + visible(file))
+        if tool == "create" {
+            content := action.get_str(action.root, "content").unwrap_or_default()
+            lines(&mut out, "+ ", content)
+            if content != "" && !text.ends_with(content, "\n") { out.push("  [no newline at end of file]") }
+        } else {
+            old := action.get_str(action.root, "old").unwrap_or_default()
+            new := action.get_str(action.root, "new").unwrap_or_default()
+            lines(&mut out, "- ", old)
+            lines(&mut out, "+ ", new)
+            if text.ends_with(old, "\n") != text.ends_with(new, "\n") {
+                out.push(if text.ends_with(new, "\n") { "  [new fragment ends with LF]" } else { "  [old fragment ends with LF]" })
+            }
         }
     }
     if out.len == 0 { return "No saved file edits in this session." }

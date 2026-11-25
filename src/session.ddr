@@ -15,9 +15,13 @@ pub struct Event { kind: string, body: string }
 @derive(Encode, Decode)
 pub struct Session { root: string, events: []Event }
 
-pub fn directory() -> Result<string, string> {
+pub fn state_dir() -> string {
     base := process.env_or("XDG_STATE_HOME", path.join(process.env_or("HOME", ""), ".local/state"))
-    dir := path.join(base, "dunder-agent")
+    path.join(base, "dunder-agent")
+}
+
+pub fn directory() -> Result<string, string> {
+    dir := state_dir()
     if !fs.mkdir_all(dir).ok { return .Err("Could not create the session directory.") }
     workspace.io_status(fs.chmod(dir, 448))?
     .Ok(dir)

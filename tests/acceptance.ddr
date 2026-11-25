@@ -139,6 +139,42 @@ fn run(app: string, dir: string, args: []string) -> process.Output {
     command(app, dir, args).exec()
 }
 
+fn check_transcript(app: string, dir: string) {
+    assert(sys.write(path.join(dir, "note.txt"), "old").is_ok())
+    live := run(app, dir, ["--jsonl", "--check", "test \"$(cat note.txt)\" = new && echo verified", "run", "repair"])
+    assert(live.succeeded() && live.stderr.len == 0)
+    rows := text.split(text.trim(live.stdout_text()), "\n")
+    first := json.Doc::parse_text(rows[0])
+    assert(first.get_str(first.root, "type").unwrap() == "session" && first.get_str(first.root, "root").unwrap() == fs.realpath(dir).value)
+    id := first.get_str(first.root, "id").unwrap()
+    file := path.join(path.join(dir, "state/dunder-agent"), id + ".json")
+    original := sys.read(file).unwrap()
+    saved := json.Doc::parse_text(original)
+    events := saved.field(saved.root, "events")
+    count := saved.count(events)
+    assert(count > 4 && rows.len == count + 2)
+    for i in 0..count {
+        row := json.Doc::parse_text(rows[i + 1])
+        e := saved.at(events, i)
+        assert(row.get_str(row.root, "type").unwrap() == "event" && row.get_i64(row.root, "index").unwrap() == i64(i))
+        assert(row.get_str(row.root, "kind").unwrap() == saved.get_str(e, "kind").unwrap() && row.get_str(row.root, "body").unwrap() == saved.get_str(e, "body").unwrap())
+    }
+    last := json.Doc::parse_text(rows[rows.len - 1])
+    assert(last.get_str(last.root, "type").unwrap() == "end" && last.get_bool(last.root, "success").unwrap())
+    replay := run(app, dir, ["show", id.clone(), "--jsonl"])
+    assert(replay.succeeded() && replay.stderr.len == 0 && replay.stdout_text() + rows[rows.len - 1] + "\n" == live.stdout_text())
+    human := run(app, dir, ["show", id.clone()])
+    assert(human.succeeded() && text.contains(human.stdout_text(), "[result]\nexit 0, signal 0\nverified") && text.contains(human.stdout_text(), "[assistant]\nDone."))
+    assert(sys.read(file).unwrap() == original)
+    resumed := run(app, dir, ["--resume", id, "--jsonl", "run", "blocked"])
+    more := text.split(text.trim(resumed.stdout_text()), "\n")
+    assert(resumed.code == 1 && more.len == 4 && more[0] == rows[0])
+    next := json.Doc::parse_text(more[1])
+    assert(next.get_i64(next.root, "index").unwrap() == i64(count) && next.get_str(next.root, "body").unwrap() == "blocked")
+    end := json.Doc::parse_text(more[3])
+    assert(!end.get_bool(end.root, "success").unwrap() && end.get_str(end.root, "status").unwrap() == "Task blocked")
+}
+
 fn check_stdin(app: string, dir: string) {
     mut cmd := command(app, dir, ["run", "-"])
     cmd.set_stdin_text("  fortsätt ⚡\r\nrad två\n\n")
@@ -183,6 +219,7 @@ fn main() -> i32 {
     defer { _ := server.kill(); _ := server.wait(1000) }
     assert(server.read_stdout_line(5000).unwrap().is_some())
     check_stdin(app, dir)
+    check_transcript(app, dir)
     assert(sys.write(path.join(dir, "level.txt"), "3").is_ok())
     log := "printf 'build started\n'; awk 'BEGIN {for (i=0;i<100000;i++) print \"compiling module\"}'; printf 'build ended\n'; "
     verify_level := log + "if test \"$(cat level.txt)\" = 4; then echo 'tests passed'; else printf '\\377wrong value in level.txt\n' >&2; exit 3; fi"
@@ -270,6 +307,6 @@ fn main() -> i32 {
     expired := timed.exec()
     assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
     assert(fs.list_dir(scratch).unwrap().len == 0)
-    print("PASS mascot, CLI help, stdin tasks, repair from noisy diagnostics, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
+    print("PASS mascot, CLI help, stdin tasks, stream and replay, repair from noisy diagnostics, pipe output, reference lookup and compiler repair, single and grouped edits, stale preflight, automatic check, resume, failed check, shell permission, model variant, model timeout, decision budget, deadline cancellation")
     0
 }

@@ -10,17 +10,42 @@ import std.time as clock
 import .engine
 import .output
 import .mascot
+import .session
+import .review
 import sys
 
 pub fn mood(phase: engine.Phase) -> string {
     match phase { .Model => "thinking", .Command => "check", .Check => "check", .Approval => "approval", _ => "idle", }
 }
 
-fn emit(run: &engine.Run, cursor: &mut i32) {
+fn json_session(id: string, root: string) -> string {
+    r#"{"type":"session","id":"# + json.quote(id) + r#","root":"# + json.quote(root) + "}"
+}
+
+fn json_event(index: i32, entry: &session.Event) -> string {
+    r#"{"type":"event","index":"# + index.str() + r#","kind":"# + json.quote(entry.kind) + r#","body":"# + json.quote(entry.body) + "}"
+}
+
+fn line(value: string) -> Result<(), string> {
+    mut out := io.stdout()
+    match io.write_str(&mut out, value + "\n") { .Ok => .Ok, .Err(e) => .Err("Could not write stdout: " + e.message()), }
+}
+
+pub fn show(id: string, saved: &session.Session, jsonl: bool) -> Result<(), string> {
+    line(if jsonl { json_session(id, saved.root) } else { "Session " + id + "  " + review.visible(saved.root) })?
+    for i in 0..saved.events.len {
+        entry := &saved.events[i]
+        line(if jsonl { json_event(i, &entry) } else { "\n[" + review.visible(entry.kind) + "]\n" + review.visible(entry.body) })?
+    }
+    .Ok
+}
+
+fn emit(run: &engine.Run, cursor: &mut i32, jsonl: bool) -> Result<(), string> {
     while cursor < run.history.events.len {
         index := cursor
         cursor += 1
         entry := &run.history.events[index]
+        if jsonl { line(json_event(index, &entry))?; continue }
         if entry.kind == "action" {
             action := json.Doc::parse_text(entry.body)
             _ := sys.eprint("· " + engine.safe(engine.label(&action)))
@@ -35,13 +60,13 @@ fn emit(run: &engine.Run, cursor: &mut i32) {
             }
         }
     }
+    .Ok
 }
 
-pub fn batch(run: &mut engine.Run, prompt: string, plain: bool) -> Result<(), string> {
-    mut signals := match signal.SignalWatcher::watch(&[signal.Signal.Int, signal.Signal.Term]) { .Ok(w) => move w, .Err(e) => { return .Err(e.message()) }, }
-    mut cursor := run.history.events.len
+fn turn(run: &mut engine.Run, prompt: string, plain: bool, jsonl: bool, cursor: &mut i32, signals: &mut signal.SignalWatcher) -> Result<(), string> {
     engine.submit(&mut run, prompt)?
-    animate := !plain && io.stderr().is_tty() && io.stdout().is_tty() && process.env_or("TERM", "") != "dumb"
+    emit(&run, &mut cursor, jsonl)?
+    animate := !plain && !jsonl && io.stderr().is_tty() && io.stdout().is_tty() && process.env_or("TERM", "") != "dumb"
     color := process.env("NO_COLOR").is_none()
     mut drawn := false
     mut previous_tick := i64(-1)
@@ -52,7 +77,7 @@ pub fn batch(run: &mut engine.Run, prompt: string, plain: bool) -> Result<(), st
         changed := match engine.poll(&mut run) { .Ok(v) => v, .Err(e) => { engine.stop(&mut run, e); true }, }
         if cursor != run.history.events.len {
             if drawn { _ := sys.write_stderr("\r\u{1b}[2K"); drawn = false }
-            emit(&run, &mut cursor)
+            emit(&run, &mut cursor, jsonl)?
         }
         tick := clock.monotonic_ms() / 160
         if animate && run.phase != .Idle && tick != previous_tick {
@@ -73,7 +98,22 @@ pub fn batch(run: &mut engine.Run, prompt: string, plain: bool) -> Result<(), st
             idle_ms = cmp.min<i64>(30, idle_ms * 2)
         }
     }
-    emit(&run, &mut cursor)
     if run.failed { return .Err(run.status.clone()) }
     .Ok
+}
+
+pub fn batch(run: &mut engine.Run, id: string, prompt: string, plain: bool, jsonl: bool, start: i32) -> Result<(), string> {
+    mut watched: []signal.Signal = [.Int, .Term]
+    if jsonl { watched.push(.Pipe) }
+    mut signals := match signal.SignalWatcher::watch(&watched) { .Ok(w) => move w, .Err(e) => { return .Err(e.message()) }, }
+    if jsonl { line(json_session(id, run.history.root))? }
+    mut cursor := start
+    outcome := turn(&mut run, prompt, plain, jsonl, &mut cursor, &mut signals)
+    match outcome { .Err(e) if !run.failed => { engine.stop(&mut run, e) }, _ => {}, }
+    emit(&run, &mut cursor, jsonl)?
+    if jsonl {
+        status := match outcome { .Ok => run.status.clone(), .Err(e) => e.clone(), }
+        line(r#"{"type":"end","success":"# + outcome.is_ok().str() + r#","status":"# + json.quote(status) + "}")?
+    }
+    outcome
 }

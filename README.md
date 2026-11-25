@@ -26,6 +26,7 @@ dunder-agent --workspace . --check 'dunder test' run 'Fixa det röda testet'
 dunder-agent --workspace . --check 'dunder test' run - < uppgift.txt
 dunder-agent --workspace . --sessions
 dunder-agent --workspace . changes SESSION_ID
+dunder-agent --workspace . show SESSION_ID
 dunder-agent --workspace . --resume SESSION_ID --check 'dunder test'
 ```
 
@@ -54,6 +55,17 @@ Modellen ser referensernas namn och kan lista, söka och läsa i dem. Verktygslo
 Dunder äger kontexten, verktygsanropen, avbrotten och historiken. Varje beslut hämtas från OpenCodes lokala `/api/experimental/generate/text` med Dunders HTTP-klient. Standardmodellen är `zai-coding-plan/glm-5.4`. OpenCode använder sin befintliga GLM-inloggning. Med `--model provider/modell` väljer du en modell som redan finns i OpenCode. Ange exempelvis `--model 'zai-coding-plan/glm-5.4#low'` för att välja en registrerad variant. En modellbegäran får 140 sekunder som standard. `--model-timeout 240` ger varje beslut fyra minuter. Integrationen är provad mot OpenCode 2.3.2 på IPv4-loopback. [OpenCodes API-kontrakt](https://github.com/anomalyco/opencode/blob/v2.3.2/packages/protocol/src/groups/generate.ts) · [GLM Coding Plan](https://docs.z.ai/devpack/tool/others)
 
 Sessionerna sparas efter varje händelse under `$XDG_STATE_HOME/dunder-agent`, normalt `~/.local/state/dunder-agent`. De innehåller instruktioner, verktygsresultat och svar och har filrättighet 0600. En session hör till en arbetskatalog och kan öppnas för skrivning av en process åt gången.
+
+### Läs och strömma en session
+
+`show SESSION_ID` visar sparade instruktioner, verktygsanrop, fullständiga sparade resultat och svar. Det fungerar även medan en annan terminal har sessionen öppen. `changes SESSION_ID` visar vilka textfragment filverktygen faktiskt sparade. Där markeras ändrade avslutande radbrytningar och ett vagnreturtecken visas som `\r`.
+
+```sh
+dunder-agent --jsonl --check 'dunder test' run 'Rätta testet' > körning.jsonl
+dunder-agent --jsonl show SESSION_ID > historik.jsonl
+```
+
+Varje rad på stdout är ett JSON-objekt. Först kommer `session` med `id` och `root`. Sedan kommer `event` med ett nollbaserat `index`, `kind` och den sparade texten i `body`. För ett verktygsanrop innehåller `body` dess JSON. En livekörning avslutas med `end`, som har `success` och `status`. Vid `--resume` börjar strömmen vid nästa index. `show` läser ut alla sparade händelser i ordning, även för äldre sessioner.
 
 ## Mål
 

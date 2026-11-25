@@ -200,6 +200,16 @@ fn tool(root: string, args: string) -> Result<string, string> {
     assert(review.changes(&s) == "create a\n+ one\n+ \n+ two\n\nedit a\n- one\n\ncreate empty")
 }
 
+@test fn review_exposes_changed_line_endings_and_control_bytes() {
+    mut state := session.Session { root: ".", events: [] }
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"edit","path":"file","old":"word\r\n","new":"word"}"# })
+    state.events.push(session.Event { kind: "result", body: "Saved." })
+    state.events.push(session.Event { kind: "action", body: r#"{"tool":"create","path":"other","content":"\u001b[2J"}"# })
+    state.events.push(session.Event { kind: "result", body: "Saved." })
+    assert(review.changes(&state) == "edit file\n- word\\r\n+ word\n  [old fragment ends with LF]\n\ncreate other\n+ \\x1b[2J\n  [no newline at end of file]")
+    assert(review.visible("a\u{0}\u{85}b\t⚡") == "a\\x00\\x85b\t⚡")
+}
+
 @test fn model_references_preserve_nested_ids_and_separate_the_variant() {
     raw := provider.model_ref("fixture/vendor/model#low").unwrap()
     doc := json.Doc::parse_text(raw)
