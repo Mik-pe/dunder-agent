@@ -1,6 +1,8 @@
 capability filesystem, process, stdio
 import .corpus
 import .competitors
+import .quota as quota_time
+import std.time as clock
 import std.fs as fs
 import std.json as json
 import std.path as path
@@ -19,7 +21,8 @@ fn fake_trial() -> i32 {
     defer { _ := fs.remove_all(work) }
     tree := corpus.seed(fixture, path.join(work, "work"))
     retry := path.basename(out) == "retry-1"
-    quota := name == "a" && rep == "1" && !retry
+    repeat := sys.metadata("repeat-limit").ok
+    quota := name == "a" && rep == "1" && (!retry || repeat)
     reason := if quota && peer == "pi" { "missing-final-check" } else if quota && peer == "goose" { "harness-error" } else if quota { "provider-error" } else if name == "a" && rep == "2" { "timeout" } else if name == "a" && rep == "3" { "holdout-tests" } else { "pass" }
     digest := corpus.fingerprint(sys.arg(0))
     row := corpus.Trial {
@@ -30,8 +33,12 @@ fn fake_trial() -> i32 {
         manual_interventions: 0, exit_code: if reason == "timeout" { 124 } else if reason == "harness-error" { 1 } else { 0 }, signal: 0,
     }
     if quota && (peer == "pi" || peer == "goose") {
-        log := if peer == "goose" { r#"{"type":"error","error":"Ran into this error: Rate limit exceeded: [1308][Usage limit reached for 5 hour.]"}"# } else {
-            r#"{"type":"agent_end","willRetry":false,"messages":[{"role":"assistant","stopReason":"error","errorMessage":"429: {\"code\":\"1308\",\"message\":\"Usage limit reached for 5 hour.\"}"}]}"#
+        stamp := clock.format_rfc3339(clock.unix_now().secs + 1)
+        reset := if repeat { "2000-01-01 00:00:00" } else { text.replace(stamp[0..19], "T", " ") }
+        msg := "Usage limit reached for 5 hour. Your limit will reset at " + reset
+        log := if peer == "goose" { r#"{"type":"error","error":"# + json.quote("Ran into this error: Rate limit exceeded: [1308][" + msg + "]") + "}" } else {
+            err := "429: " + r#"{"code":"1308","message":"# + json.quote(msg) + "}"
+            r#"{"type":"agent_end","willRetry":false,"messages":[{"role":"assistant","stopReason":"error","errorMessage":"# + json.quote(err) + "}]}"
         }
         assert(sys.write(path.join(out, "turn-1.stdout"), log).is_ok())
     }
@@ -93,6 +100,23 @@ fn main() -> i32 {
         assert(retried.succeeded() && sys.metadata(path.join(base, "retry-1/result.json")).is_file)
         assert(sys.read(path.join(base, "result.json")).unwrap() == original)
     }
+    waiting := run(app, dir, ["run", "waited", "pi.json", "1"])
+    assert(!waiting.succeeded())
+    pending := run(app, dir, ["report", "waited"])
+    assert(pending.succeeded() && text.contains(pending.stdout_text(), "pi\t0\t0\t0\t0\t0\t5\t-\t0\t1"))
+    original_quota := sys.read(path.join(dir, "waited/a/pi-1/result.json")).unwrap()
+    watched := run(app, dir, ["watch", "waited", "pi.json", "+00:00", "1"])
+    assert(watched.succeeded() && text.contains(watched.stderr_text(), "Waiting for quota until "))
+    base := path.join(dir, "waited/a/pi-1")
+    assert(sys.read(path.join(base, "result.json")).unwrap() == original_quota && sys.metadata(path.join(base, "retry-1/result.json")).is_file)
+    assert(sys.write(path.join(dir, "repeat-limit"), "").is_ok())
+    expired := run(app, dir, ["watch", "expired", "pi.json", "+00:00"])
+    assert(!expired.succeeded() && text.contains(expired.stderr_text(), "repeated an expired quota reset"))
+    assert(!sys.metadata(path.join(dir, "expired/a/pi-1/retry-2")).ok)
+    assert(sys.remove_file(path.join(dir, "repeat-limit")).ok)
+    unknown := run(app, dir, ["watch", "no-reset", "plan.json", "+08:00"])
+    assert(!unknown.succeeded() && text.contains(unknown.stderr_text(), "without a verified quota reset"))
+    assert(!sys.metadata(path.join(dir, "no-reset/a/dunder-1/retry-1")).ok)
     assert(sys.write(path.join(dir, "dogfood/cases/b/start/file"), "changed").is_ok())
     assert(!run(app, dir, args.clone()).succeeded())
     assert(sys.write(initial, text.replace(before, "fixture 1", "foreign version")).is_ok())
@@ -112,11 +136,21 @@ fn main() -> i32 {
     assert(!competitors.provider_unavailable("pi", &output_sample(text.replace(terminal, "assistant", "toolResult"), "", 0)))
     recovered := r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop"}]}"#
     assert(!competitors.provider_unavailable("pi", &output_sample(terminal + "\n" + recovered, "", 0)))
+    cline := r#"{"type":"run_result","finishReason":"error","text":"# + json.quote(quota) + "}"
+    assert(competitors.provider_unavailable("cline", &output_sample(cline, "", 1)))
+    assert(!competitors.provider_unavailable("cline", &output_sample(cline, "", 0)))
+    assert(!competitors.provider_unavailable("cline", &output_sample(text.replace(cline, "\"error\"", "\"done\""), "", 1)))
+    eight := quota_time.offset("+08:00").unwrap()
+    assert(eight == 28800 && quota_time.offset("-03:30").unwrap() == -12600)
+    for value in ["08:00", "+14:01", "+08:60", "+0x:00"] { assert(quota_time.offset(value).is_err()) }
+    assert(quota_time.reset(quota, eight).unwrap() == 946692000)
+    assert(quota_time.reset(text.replace(quota, "2000-01-01", "2023-02-29"), eight).is_none())
+    assert(quota_time.reset(quota + "Z", eight).is_none() && quota_time.reset("temporary", eight).is_none())
     assert(competitors.dunder_failure("Session 1\nOpenCode connection failed (libcurl 28).\n") == "model-timeout")
     assert(competitors.dunder_failure("OpenCode model request timed out after 230 s.") == "model-timeout")
     assert(competitors.dunder_failure("OpenCode exceeded its 1 MiB output limit.") == "model-limit")
     assert(!competitors.provider_unavailable("dunder", &output_sample("", "OpenCode connection failed (libcurl 28).", 1)))
     assert(competitors.provider_unavailable("dunder", &output_sample("", "OpenCode HTTP 503 (service): unavailable", 1)))
-    print("PASS frozen fixtures, immutable retries, three repetitions, median, independent tree grading, mismatched receipts, provider errors")
+    print("PASS frozen fixtures, immutable retries, three repetitions, median, independent tree grading, mismatched receipts, provider errors, quota wait and retry")
     0
 }

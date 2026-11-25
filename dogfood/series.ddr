@@ -1,6 +1,9 @@
 capability filesystem, process, stdio, unsafe
 import .corpus
 import .competitors
+import .quota
+import std.cmp as cmp
+import std.time as clock
 import std.array as array
 import std.fs as fs
 import std.json as json
@@ -91,9 +94,9 @@ fn receipt(folder: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant
             if reason != "" { row.status = reason.clone() }
         }
     }
-    if (row.harness == "pi" || row.harness == "goose") && row.status != "timeout" && row.status != "provider-error" {
+    if (row.harness == "pi" || row.harness == "goose" || row.harness == "cline") && row.status != "timeout" && row.status != "provider-error" {
         stdout := sys.read_text_limit(path.join(folder, "turn-" + row.turns_started.str() + ".stdout"), 67108864)
-        if stdout.ok && competitors.terminal_quota(row.harness, stdout.value, row.exit_code) { row.status = "provider-error" }
+        if stdout.ok && quota.message(row.harness, stdout.value, row.exit_code) != "" { row.status = "provider-error" }
     }
     .Ok(row)
 }
@@ -118,12 +121,13 @@ fn scored(status: string) -> bool {
 }
 
 fn report(cfg: &Campaign, root: string) -> Result<(), string> {
-    print("harness\tsolved\ttree-verified\tfully-tested\tscored\treview\tmissing\tmedian-ms\tmanual")
+    print("harness\tsolved\ttree-verified\tfully-tested\tscored\treview\tmissing\tmedian-ms\tmanual\tprovider")
     for peer in &cfg.programs {
         mut solved := 0
         mut tree_solved := 0
         mut fully := 0
         mut review := 0
+        mut provider := 0
         mut missing := 0
         mut manual := 0
         mut times: []i64 = []
@@ -135,6 +139,7 @@ fn report(cfg: &Campaign, root: string) -> Result<(), string> {
                 folder := attempt(slot(root, &fixture, &peer, r), &cfg, &fixture, &peer, r, false)?
                 if !sys.metadata(path.join(folder, "result.json")).is_file { missing += 1; continue }
                 row := receipt(folder, &cfg, &fixture, &peer, r)?
+                if row.status == "provider-error" { provider += 1; continue }
                 if !scored(row.status) { review += 1; continue }
                 if row.tree_status == "pass" && row.turns_started == row.turns_required { passing_trees += 1 }
                 decisions += 1
@@ -148,30 +153,60 @@ fn report(cfg: &Campaign, root: string) -> Result<(), string> {
         }
         array.sort(&mut times)
         median := if times.len == 0 { "-" } else { ((times[(times.len - 1) / 2] + times[times.len / 2]) / 2).str() }
-        print(f"{peer.name}\t{solved}\t{tree_solved}\t{fully}\t{times.len}\t{review}\t{missing}\t{median}\t{manual}")
+        print(f"{peer.name}\t{solved}\t{tree_solved}\t{fully}\t{times.len}\t{review}\t{missing}\t{median}\t{manual}\t{provider}")
     }
     .Ok
 }
 
-fn series(cfg: &Campaign, root: string, limit: i32) -> Result<(), string> {
+fn reset_for(folder: string, row: &corpus.Trial, zone: i64) -> Result<i64, string> {
+    ext := if row.harness == "dunder" { ".stderr" } else { ".stdout" }
+    file := path.join(folder, "turn-" + row.turns_started.str() + ext)
+    log := sys.read_text_limit(file, 67108864)
+    if log.ok {
+        msg := quota.message(row.harness, log.value, row.exit_code)
+        match quota.reset(msg, zone) { .Some(t) => { return .Ok(t) }, .None => {}, }
+    }
+    .Err("Provider unavailable without a verified quota reset at " + folder)
+}
+
+fn series(cfg: &Campaign, root: string, limit: i32, zone: Option<i64>) -> Result<(), string> {
     mut added := 0
     for rep in 1..(cfg.repetitions + 1) {
         for n in 0..cfg.fixtures.len {
             fixture := &cfg.fixtures[(n + rep - 1) % cfg.fixtures.len]
             for i in 0..cfg.programs.len {
                 peer := &cfg.programs[(i + n + rep - 1) % cfg.programs.len]
-                folder := attempt(slot(root, &fixture, &peer, rep), &cfg, &fixture, &peer, rep, true)?
-                if !sys.metadata(path.join(folder, "result.json")).is_file {
-                    if added >= limit { return .Ok }
-                    if sys.metadata(folder).ok { return .Err("Open or interrupted attempt: " + folder) }
-                    _ := sys.eprint(f"{fixture.name} / {peer.name} / {rep}")
-                    mut trial := process.Command::new(cfg.judge.clone(), [fixture.name.clone(), peer.name.clone(), peer.exe.clone(), rep.str(), folder.clone()])
-                    trial.inherit_stdio()
-                    _ := trial.exec()
-                    added += 1
+                base := slot(root, &fixture, &peer, rep)
+                mut folder := attempt(base, &cfg, &fixture, &peer, rep, false)?
+                mut last_reset := i64(-1)
+                while true {
+                    fresh := !sys.metadata(path.join(folder, "result.json")).is_file
+                    if fresh {
+                        if added >= limit { return .Ok }
+                        if sys.metadata(folder).ok { return .Err("Open or interrupted attempt: " + folder) }
+                        _ := sys.eprint(f"{fixture.name} / {peer.name} / {rep}")
+                        mut trial := process.Command::new(cfg.judge.clone(), [fixture.name.clone(), peer.name.clone(), peer.exe.clone(), rep.str(), folder.clone()])
+                        trial.inherit_stdio()
+                        _ := trial.exec()
+                        added += 1
+                    }
+                    row := receipt(folder, &cfg, &fixture, &peer, rep)?
+                    if row.status != "provider-error" { break }
+                    if zone.is_some() {
+                        if added >= limit { return .Ok }
+                        reset := reset_for(folder, &row, zone.unwrap())?
+                        if reset <= last_reset { return .Err("Provider repeated an expired quota reset at " + folder) }
+                        last_reset = reset
+                        ready := reset + 3
+                        if ready > clock.unix_now().secs { _ := sys.eprint("Waiting for quota until " + clock.format_rfc3339(ready) + " at " + folder) }
+                        while true {
+                            left := ready - clock.unix_now().secs
+                            if left <= 0 { break }
+                            sys.sleep_ms(cmp.min<i64>(60, left) * 1000)
+                        }
+                    } else if fresh { return .Err("Provider unavailable at " + folder + ". Resume to retain this receipt and retry.") }
+                    folder = attempt(base, &cfg, &fixture, &peer, rep, true)?
                 }
-                row := receipt(folder, &cfg, &fixture, &peer, rep)?
-                if row.status == "provider-error" { return .Err("Provider unavailable at " + folder + ". Resume to retain this receipt and retry.") }
             }
         }
     }
@@ -179,7 +214,7 @@ fn series(cfg: &Campaign, root: string, limit: i32) -> Result<(), string> {
 }
 
 fn drive() -> Result<(), string> {
-    if sys.arg_count() < 3 { return .Err("series report OUT | series run OUT PLAN [MAX-NEW]") }
+    if sys.arg_count() < 3 { return .Err("series report OUT | series run OUT PLAN [MAX-NEW] | series watch OUT PLAN PROVIDER-OFFSET [MAX-NEW]") }
     root := sys.arg(2)
     file := path.join(root, "campaign.json")
     if sys.arg(1) == "report" && sys.arg_count() == 3 {
@@ -187,10 +222,16 @@ fn drive() -> Result<(), string> {
         cfg := json.from_str<Campaign>(raw).ok().ok_or("Invalid campaign.")?
         return report(&cfg, root)
     }
-    if sys.arg(1) != "run" || sys.arg_count() < 4 || sys.arg_count() > 5 { return .Err("series run OUT PLAN [MAX-NEW]") }
+    watch := sys.arg(1) == "watch"
+    required := if watch { 5 } else { 4 }
+    if (!watch && sys.arg(1) != "run") || sys.arg_count() < required || sys.arg_count() > required + 1 {
+        return .Err("series run OUT PLAN [MAX-NEW] | series watch OUT PLAN PROVIDER-OFFSET [MAX-NEW]")
+    }
+    mut zone: Option<i64> = .None
+    if watch { zone = .Some(quota.offset(sys.arg(4))?) }
     mut limit := 2147483647
-    if sys.arg_count() == 5 {
-        value := sys.arg(4)
+    if sys.arg_count() == required + 1 {
+        value := sys.arg(required)
         parsed := parse.i64_range(value, 0, value.len)
         if !parsed.ok || parsed.value < 0 || parsed.value > 2147483647 { return .Err("Invalid attempt count.") }
         limit = i32(parsed.value)
@@ -208,7 +249,7 @@ fn drive() -> Result<(), string> {
     } else {
         if fs.write_private_text_atomic(file, encoded).is_err() { return .Err("Could not save campaign.") }
     }
-    series(&cfg, root, limit)?
+    series(&cfg, root, limit, zone)?
     report(&cfg, root)
 }
 
