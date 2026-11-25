@@ -57,6 +57,8 @@ dunder run dogfood/cline_test.ddr --offline --locked -- build/compare "$(command
 
 Den inledande serien med Dunder Agent 0.2.0 sparas som baslinje. Dess Cline-försök med felaktigt sessions-id står kvar för granskning. Serien med 0.5.0 börjar om för alla sex deltagare med samma tolv uppgifter, modell, tidsbudget och tre upprepningar. Cline står först i den roterande startordningen för att den rättade återupptagningen ska provas tidigt.
 
+Vid första GLM-försöket i den nya serien återupptog både Cline och Dunder sessionen efter en godkänd första del. Cline nådde femminutersgränsen före en godkänd slutkontroll. Dunder skrev `let` i Dunder-koden, fick ett kompileringsfel och nådde sedan sin modellgräns på 140 sekunder. Dunder lade också till ett test i den skyddade filen `public.ddr`. Bedömaren kräver byteidentiska ursprungstester även vid rena tillägg. Uppgiftsmeddelandet namnger inte de skyddade filerna. Det påverkar hur `protected-file` ska tolkas.
+
 ## Kör eller återuppta serien
 
 Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunder Agent enligt rotens README. Planen väljer deltagare och körbara filer. Alla deltagare körs en i taget. Varje uppgift får tre försök per deltagare och startordningen växlar.
