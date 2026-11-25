@@ -7,6 +7,7 @@ import std.json as json
 import std.fs as fs
 import std.path as path
 import std.text as text
+import std.process as process
 import sys
 
 fn tool(root: string, args: string) -> Result<string, string> {
@@ -71,6 +72,26 @@ fn tool(root: string, args: string) -> Result<string, string> {
     assert(tool(dir, r#"{"tool":"list"}"#).unwrap() == "notes")
     assert(text.contains(tool(dir, r#"{"tool":"search","query":"a.b"}"#).unwrap(), "notes:2:a.b"))
     assert(tool(dir, r#"{"tool":"search","query":"a?b"}"#).unwrap() == "No matches.")
+}
+
+@test fn git_listing_shows_tracked_and_nonignored_entries() {
+    dir := fs.temp_dir("dunder-git-list-test-").value
+    defer { _ := fs.remove_all(dir) }
+    assert(process.run_in("git", ["init", "-q"], dir).succeeded())
+    assert(sys.write(path.join(dir, ".gitignore"), "build/\n*.o\n").is_ok())
+    assert(fs.mkdir_all(path.join(dir, "build/nested")).ok)
+    assert(sys.write(path.join(dir, "build/nested/kept"), "x\n").is_ok())
+    assert(sys.write(path.join(dir, "build/skip"), "x\n").is_ok())
+    assert(sys.write(path.join(dir, "code.o"), "x\n").is_ok())
+    assert(sys.write(path.join(dir, "notes"), "x\n").is_ok())
+    assert(process.run_in("git", ["add", "-f", "build/nested/kept", "notes", ".gitignore"], dir).succeeded())
+    assert(sys.write(path.join(dir, "Önskelista"), "ok").is_ok())
+    assert(workspace.listing(dir).unwrap() == ".gitignore\nbuild/\nnotes\nÖnskelista")
+    assert(workspace.listing(path.join(dir, "build")).unwrap() == "nested/")
+    assert(sys.remove_file(path.join(dir, "build/nested/kept")).ok)
+    assert(sys.remove_file(path.join(dir, "notes")).ok)
+    assert(workspace.listing(dir).unwrap() == ".gitignore\nÖnskelista")
+    assert(workspace.listing(path.join(dir, "build")).unwrap() == "")
 }
 
 @test fn provider_requires_complete_text_decision() {

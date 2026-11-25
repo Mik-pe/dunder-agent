@@ -1,10 +1,13 @@
 capability filesystem, process
 import std.array as array
+import std.bytes as bytes
 import std.fs as fs
 import std.json as json
 import std.path as path
 import std.process as process
+import std.set as set
 import std.text as text
+import std.time as clock
 import sys
 
 pub fn clip(s: string, limit: i32) -> string {
@@ -35,8 +38,53 @@ fn read_file(file: string) -> Result<string, string> {
     match sys.read_limit(file, 524288) { .Ok(v) => .Ok(v), .Err(e) => .Err(e.message()), }
 }
 
+fn include_path(dir: string, path_bytes: &[]u8, names: &mut set.Set<string>) {
+    rel := match bytes.decode(&path_bytes) { .Ok(s) => s, .Err(_) => { return }, }
+    end := text.find(rel, "/").unwrap_or(rel.len)
+    name := rel[0..end]
+    if name == "" || name == "." || text.lower(name) == ".git" || names.contains(name) { return }
+    for b in name.bytes() { if b < 32 || b == 127 { return } }
+    if !fs.is_symlink(path.join(dir, name)) && sys.metadata(path.join(dir, rel)).ok {
+        _ := names.insert(name.clone())
+    }
+}
+
+fn git_names(dir: string) -> Result<[]string, string> {
+    mut cmd := process.Command::new("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."])
+    cmd.set_cwd(dir.clone())
+    cmd.set_stdio(.Null, .Pipe, .Null)
+    mut child := match cmd.spawn() { .Ok(c) => move c, .Err(e) => { return .Err(e.message()) }, }
+    mut finished := false
+    defer { if !finished { _ := child.kill(); _ := child.wait(1000) } }
+    mut names := set.Set<string>::new()
+    mut chunk: []u8 = []
+    mut name: []u8 = []
+    deadline := clock.monotonic_ms() + 10000
+    while true {
+        left := deadline - clock.monotonic_ms()
+        if left <= 0 { return .Err("Git file listing timed out.") }
+        chunk.clear()
+        n := match child.read_stdout(&mut chunk, 65536, left) { .Ok(size) => size, .Err(e) => { return .Err(e.message()) }, }
+        if n == 0 { break }
+        for b in &chunk {
+            if b == 0 { include_path(dir, &name, &mut names); name.clear() } else { name.push(b) }
+        }
+    }
+    status := child.wait(1000)
+    finished = status.exited
+    if !status.ok || status.code != 0 || status.signal != 0 { return .Err("Git could not list the working tree.") }
+    .Ok(names.values())
+}
+
 pub fn listing(dir: string) -> Result<string, string> {
-    mut names := match fs.list_dir(dir) { .Ok(v) => v, .Err(e) => { return .Err(e.message()) }, }
+    mut names := match git_names(dir) {
+        .Ok(v) => v,
+        .Err(reason) => {
+            probe := process.run_in("git", ["rev-parse", "--is-inside-work-tree"], dir)
+            if probe.succeeded() && text.trim(probe.stdout_text()) == "true" { return .Err(reason) }
+            match fs.list_dir(dir) { .Ok(v) => v, .Err(e) => { return .Err(e.message()) }, }
+        },
+    }
     array.sort(&mut names)
     mut lines: []string = []
     for name in &names {

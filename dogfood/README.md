@@ -12,6 +12,12 @@ Funktionen ska hålla ett värde inom ett slutet intervall. Startläget har två
 
 Den 25 november 2026 klarade GLM-5.4 uppgiften på 31,7 sekunder med OpenCode 2.3.2, Dunder 0.12.1 och macOS ARM64. Agenten listade katalogen, läste implementationen och testerna, redigerade funktionen och körde testerna. Bedömaren fick sex godkända tester. En omkörning från en ren klon tog 21,5 sekunder och klarade samma sex tester. Tiderna avser agentkörningen från start till slutsvar. Bygget och den fristående bedömningen ligger utanför mätningen.
 
+## Agenten ändrar sin egen filöversikt
+
+I en återupptagen uppgift lade agenten ett modellbeslut på den Git-ignorerade katalogen `build/`. Den fick därför en ren klon av Dunder Agent och uppgiften att rätta filöversikten och skriva ett regressionstest. Första körningen läste koden och nådde modellens tidsgräns. Samma session återupptogs med GLM-5.4-varianten `low` och 230 sekunder per modellbeslut. På 126 sekunder redigerade agenten implementationen och testet och fick sin lokala kontroll grön efter tre misslyckade kontroller.
+
+Den ursprungliga implementationen klarade ett av fyra oberoende prov och agentens ändring klarade tre. En raderad fil i Git-indexet syntes fortfarande. Efter en manuell rättning passerade alla fyra, inklusive sortering, nästlade ignoreregler, spårade undantag, direktläsning och utmatningsgränsen. Detta var ett separat utvecklingsprov. Ett påbörjat Goose-försök som överlappade utvecklingsprovet arkiverades före bedömning och startades om från samma revision.
+
 ## Jämför harnessar lokalt
 
 Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
