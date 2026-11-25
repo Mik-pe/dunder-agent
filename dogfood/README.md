@@ -65,6 +65,8 @@ Den inledande serien med Dunder Agent 0.2.0 sparas som baslinje. Dess Cline-för
 
 Vid första GLM-försöket i den nya serien återupptog både Cline och Dunder sessionen efter en godkänd första del. Cline nådde femminutersgränsen före en godkänd slutkontroll. Dunder skrev `let` i Dunder-koden, fick ett kompileringsfel och nådde sedan sin modellgräns på 140 sekunder. Dunder lade också till ett test i den skyddade filen `public.ddr`. Bedömaren kräver byteidentiska ursprungstester även vid rena tillägg. Uppgiftsmeddelandet namnger inte de skyddade filerna. Det påverkar hur `protected-file` ska tolkas.
 
+Första varvet på `billing-resume` är bedömt för alla sex. Pi och Goose klarade båda delarna på 167,6 respektive 276,8 sekunder. OpenCode lämnade ett godkänt filträd men nådde tidsgränsen. Kilo Code nådde också tidsgränsen och saknade godkänd slutkontroll. Alla sex återupptog sessionen utan manuellt ingripande. Detta är ett av tre försök per deltagare på en av tolv uppgifter.
+
 ## Kör eller återuppta serien
 
 Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunder Agent enligt rotens README. Planen väljer deltagare och körbara filer. Alla deltagare körs en i taget. Varje uppgift får tre försök per deltagare och startordningen växlar.
