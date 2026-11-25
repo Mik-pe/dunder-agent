@@ -8,9 +8,25 @@ import std.text as text
 import .cli
 import .mascot
 import .engine
+import .review
 import .workspace
 
-pub struct Screen { run: engine.Run, input: string, scroll: i32, session_id: string, elapsed: i64, motion: bool, rendered_events: i32, journal: rich.PreparedParagraph }
+pub struct Screen { run: engine.Run, input: string, scroll: i32, session_id: string, elapsed: i64, motion: bool, rendered_events: i32, reviewing: bool, journal: rich.PreparedParagraph }
+
+fn conversation(run: &engine.Run) -> string {
+    mut entries: []string = []
+    for e in &run.history.events {
+        match e.kind {
+            "user" => entries.push("› " + e.body),
+            "assistant" => entries.push(e.body.clone()),
+            "action" => { a := json.Doc::parse_text(e.body); entries.push("· " + engine.label(&a)) },
+            "result" => entries.push("  " + workspace.clip(e.body, 180)),
+            "notice" => entries.push(e.body.clone()),
+            _ => {},
+        }
+    }
+    array.join(&entries, "\n")
+}
 
 fn draw(frame: &mut tui.Frame, s: &mut Screen) {
     (top, rest) := frame.area().rows(1)
@@ -18,23 +34,14 @@ fn draw(frame: &mut tui.Frame, s: &mut Screen) {
     frame.text(head, mascot.face(cli.mood(s.run.phase), s.elapsed / 160), tui.ink(tui.rgb(0xffc965)).bold())
     frame.text(title, "Dunder Agent   " + s.run.model, tui.ink(.LightCyan).bold())
     (content, footer) := rest.rows(cmp.max<i32>(0, rest.h - 4))
-    body := frame.panel(content, " " + s.session_id + " ", tui.ink(.Cyan))
-    if s.run.history.events.len == 0 {
+    title_text := if s.reviewing { " Saved file edits " } else { " " + s.session_id + " " }
+    body := frame.panel(content, title_text, tui.ink(.Cyan))
+    if s.run.history.events.len == 0 && !s.reviewing {
         mascot.landscape(&mut frame, body, s.elapsed)
     } else {
         if s.rendered_events != s.run.history.events.len {
-            mut entries: []string = []
-            for e in &s.run.history.events {
-                match e.kind {
-                    "user" => entries.push("› " + e.body),
-                    "assistant" => entries.push(e.body.clone()),
-                    "action" => { a := json.Doc::parse_text(e.body); entries.push("· " + engine.label(&a)) },
-                    "result" => entries.push("  " + workspace.clip(e.body, 180)),
-                    "notice" => entries.push(e.body.clone()),
-                    _ => {},
-                }
-            }
-            s.journal = rich.Paragraph::raw(engine.safe(array.join(&entries, "\n"))).wrap(.Preserve).prepare(body.w)
+            display := if s.reviewing { review.changes(&s.run.history) } else { conversation(&s.run) }
+            s.journal = rich.Paragraph::raw(engine.safe(display)).wrap(.Preserve).prepare(body.w)
             s.rendered_events = s.run.history.events.len
         }
         s.journal.resize(body.w)
@@ -50,12 +57,17 @@ fn draw(frame: &mut tui.Frame, s: &mut Screen) {
     mut composer := rich.Paragraph::raw(move prompt).wrap(.Preserve).prepare(input.w)
     composer.set_top(cmp.max<i32>(0, composer.height() - input.h))
     composer.render(&mut frame, input)
-    hint := if s.run.phase == .Idle { " Enter send   ↑↓ history   Esc quit" } else { " ↑↓ history   Esc cancel" }
+    hint := if s.run.phase != .Idle { " ↑↓ history   Esc cancel" } else if s.reviewing { " Tab conversation   ↑↓ scroll   Esc quit" } else { " Enter send   ↑↓ history   Tab edits   Esc quit" }
     frame.text(help, hint, tui.ink(.DarkGray))
 }
 
 fn update(s: &mut Screen, key: tui.Key) -> bool {
     match key {
+        .Tab if s.run.phase == .Idle => {
+            s.reviewing = !s.reviewing
+            s.rendered_events = -1
+            s.scroll = 0
+        },
         .Up => { s.scroll += 3 },
         .Down => { s.scroll = cmp.max<i32>(0, s.scroll - 3) },
         .End => { s.scroll = 0 },
@@ -64,6 +76,8 @@ fn update(s: &mut Screen, key: tui.Key) -> bool {
             match engine.cancel(&mut s.run) { .Ok => {}, .Err(e) => { engine.stop(&mut s.run, e) }, }
         },
         .Enter if s.run.phase == .Idle && text.trim(s.input) != "" => {
+            s.reviewing = false
+            s.rendered_events = -1
             message := s.input.clone()
             s.input = ""
             s.scroll = 0

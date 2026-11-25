@@ -17,13 +17,14 @@ dunder-agent
 
 ![Muller i terminalen med ett blixtnedslag över bergen](docs/muller.gif)
 
-Enter skickar en uppgift. Piltangenterna rullar historiken. Esc avbryter ett pågående modell- eller kommandoanrop. När agenten är ledig avslutar Esc terminalen. Ett skalkommando som modellen föreslår visas före körning och kräver ett tryck på y. Tryck n för att neka.
+Enter skickar en uppgift. Piltangenterna rullar historiken. Tab växlar mellan samtalet och de textändringar agentens filverktyg har sparat. Esc avbryter ett pågående modell- eller kommandoanrop. När agenten är ledig avslutar Esc terminalen. Ett skalkommando som modellen föreslår visas före körning och kräver ett tryck på y. Tryck n för att neka.
 
 Kör kommandona från projektets rot. Med `--workspace DIR` kan du välja en annan arbetskatalog.
 
 ```sh
 dunder-agent --workspace . --check 'dunder test' run 'Fixa det röda testet'
 dunder-agent --workspace . --sessions
+dunder-agent --workspace . changes SESSION_ID
 dunder-agent --workspace . --resume SESSION_ID --check 'dunder test'
 ```
 

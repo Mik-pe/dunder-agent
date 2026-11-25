@@ -1,0 +1,34 @@
+capability filesystem, process
+import std.array as array
+import std.json as json
+import std.text as text
+import .session
+
+fn lines(out: &mut []string, prefix: string, snippet: string) {
+    if snippet == "" { return }
+    end := if text.ends_with(snippet, "\n") { snippet.len - 1 } else { snippet.len }
+    out.push(prefix + text.replace(snippet[0..end], "\n", "\n" + prefix))
+}
+
+pub fn changes(state: &session.Session) -> string {
+    mut out: []string = []
+    for i in 1..state.events.len {
+        result := &state.events[i]
+        if result.kind != "result" || result.body != "Saved." { continue }
+        previous := &state.events[i - 1]
+        if previous.kind != "action" { continue }
+        action := json.Doc::parse_text(previous.body)
+        tool := action.get_str(action.root, "tool").unwrap_or_default()
+        if tool != "edit" && tool != "create" { continue }
+        file := action.get_str(action.root, "path").unwrap_or_default()
+        if out.len > 0 { out.push("") }
+        out.push(tool + " " + file)
+        if tool == "create" { lines(&mut out, "+ ", action.get_str(action.root, "content").unwrap_or_default()) }
+        else {
+            lines(&mut out, "- ", action.get_str(action.root, "old").unwrap_or_default())
+            lines(&mut out, "+ ", action.get_str(action.root, "new").unwrap_or_default())
+        }
+    }
+    if out.len == 0 { return "No saved file edits in this session." }
+    array.join(&out, "\n")
+}

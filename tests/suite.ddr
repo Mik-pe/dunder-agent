@@ -1,5 +1,6 @@
 capability filesystem, process
 import ..src.workspace
+import ..src.review
 import ..src.session
 import ..src.provider
 import std.json as json
@@ -133,4 +134,19 @@ fn tool(root: string, args: string) -> Result<string, string> {
     state.events.push(session.Event { kind: "action", body: r#"{"tool":"check"}"# })
     state.events.push(session.Event { kind: "result", body: "exit 1, signal 0\nred" })
     assert(session.requires_check(&state))
+}
+
+@test fn session_review_shows_confirmed_edits_in_order() {
+    mut s := session.Session { root: ".", events: [] }
+    assert(review.changes(&s) == "No saved file edits in this session.")
+    s.events.push(session.Event { kind: "action", body: r#"{"tool":"create","path":"a","content":"one\n\ntwo\n"}"# })
+    s.events.push(session.Event { kind: "result", body: "Saved." })
+    s.events.push(session.Event { kind: "action", body: r#"{"tool":"edit","path":"a","old":"missing","new":"unsaved"}"# })
+    s.events.push(session.Event { kind: "result", body: "Error: Old text no longer matches." })
+    s.events.push(session.Event { kind: "action", body: r#"{"tool":"edit","path":"a","old":"one","new":""}"# })
+    s.events.push(session.Event { kind: "result", body: "Saved." })
+    s.events.push(session.Event { kind: "action", body: r#"{"tool":"create","path":"empty","content":""}"# })
+    s.events.push(session.Event { kind: "result", body: "Saved." })
+    s.events.push(session.Event { kind: "action", body: r#"{"tool":"create","path":"interrupted","content":"pending"}"# })
+    assert(review.changes(&s) == "create a\n+ one\n+ \n+ two\n\nedit a\n- one\n\ncreate empty")
 }
