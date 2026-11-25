@@ -153,7 +153,39 @@ pub fn dunder_failure(stderr: string) -> string {
     ""
 }
 
+pub fn terminal_quota(peer: string, stdout: string, code: i32) -> bool {
+    if peer != "goose" && peer != "pi" { return false }
+    if peer == "goose" && code == 0 { return false }
+    if !text.contains(stdout, "Usage limit reached for ") { return false }
+    lines := text.split(stdout, "\n")
+    mut i := lines.len
+    while i > 0 {
+        i -= 1
+        line := &lines[i]
+        if peer == "pi" && !text.contains(line, "\"agent_end\"") { continue }
+        doc := json.Doc::parse_text(line)
+        kind := doc.get_str(doc.root, "type").unwrap_or_default()
+        if peer == "goose" && kind != "" {
+            err := doc.get_str(doc.root, "error").unwrap_or_default()
+            return kind == "error" && text.starts_with(err, "Ran into this error: Rate limit exceeded: [1308][Usage limit reached for ")
+        }
+        if kind == "agent_end" {
+            if doc.get_bool(doc.root, "willRetry").unwrap_or(false) { return false }
+            messages := doc.field(doc.root, "messages")
+            if doc.count(messages) == 0 { return false }
+            last := doc.at(messages, doc.count(messages) - 1)
+            if doc.get_str(last, "role").unwrap_or_default() != "assistant" || doc.get_str(last, "stopReason").unwrap_or_default() != "error" { return false }
+            error := doc.get_str(last, "errorMessage").unwrap_or_default()
+            if !text.starts_with(error, "429: ") { return false }
+            info := json.Doc::parse_text(error[5..error.len])
+            return info.get_str(info.root, "code").unwrap_or_default() == "1308" && text.starts_with(info.get_str(info.root, "message").unwrap_or_default(), "Usage limit reached for ")
+        }
+    }
+    false
+}
+
 pub fn provider_unavailable(peer: string, output: &process.Output) -> bool {
+    if peer == "pi" || peer == "goose" { return terminal_quota(peer, output.stdout_text(), output.code) }
     if peer == "dunder" && !output.succeeded() {
         for line in text.split(output.stderr_text(), "\n") {
             for prefix in ["OpenCode HTTP 401 ", "OpenCode HTTP 403 ", "OpenCode HTTP 429 ", "OpenCode HTTP 5"] {

@@ -10,6 +10,7 @@ import sys
 
 fn fake_trial() -> i32 {
     name := sys.arg(1)
+    peer := sys.arg(2)
     rep := sys.arg(4)
     out := sys.arg(5)
     assert(fs.mkdir_all(out).ok)
@@ -18,14 +19,21 @@ fn fake_trial() -> i32 {
     defer { _ := fs.remove_all(work) }
     tree := corpus.seed(fixture, path.join(work, "work"))
     retry := path.basename(out) == "retry-1"
-    reason := if name == "a" && rep == "1" && !retry { "provider-error" } else if name == "a" && rep == "2" { "timeout" } else if name == "a" && rep == "3" { "holdout-tests" } else { "pass" }
+    quota := name == "a" && rep == "1" && !retry
+    reason := if quota && peer == "pi" { "missing-final-check" } else if quota && peer == "goose" { "harness-error" } else if quota { "provider-error" } else if name == "a" && rep == "2" { "timeout" } else if name == "a" && rep == "3" { "holdout-tests" } else { "pass" }
     digest := corpus.fingerprint(sys.arg(0))
     row := corpus.Trial {
-        task: name.clone(), harness: "dunder", trial: rep.clone(), model: competitors.MODEL, tree: tree.clone(),
+        task: name.clone(), harness: peer.clone(), trial: rep.clone(), model: competitors.MODEL, tree: tree.clone(),
         version: "fixture 1", fixture_sha256: corpus.fixture_digest(fixture), runner_sha256: digest.clone(), executable_sha256: digest.clone(),
         status: reason.clone(), tree_status: if reason == "timeout" { "pass" } else { reason.clone() }, turns_started: 1, turns_required: 1,
         budget_ms: 300000, elapsed_ms: if rep == "1" { i64(1000) } else if rep == "2" { i64(2000) } else { i64(3000) },
-        manual_interventions: 0, exit_code: if reason == "timeout" { 124 } else { 0 }, signal: 0,
+        manual_interventions: 0, exit_code: if reason == "timeout" { 124 } else if reason == "harness-error" { 1 } else { 0 }, signal: 0,
+    }
+    if quota && (peer == "pi" || peer == "goose") {
+        log := if peer == "goose" { r#"{"type":"error","error":"Ran into this error: Rate limit exceeded: [1308][Usage limit reached for 5 hour.]"}"# } else {
+            r#"{"type":"agent_end","willRetry":false,"messages":[{"role":"assistant","stopReason":"error","errorMessage":"429: {\"code\":\"1308\",\"message\":\"Usage limit reached for 5 hour.\"}"}]}"#
+        }
+        assert(sys.write(path.join(out, "turn-1.stdout"), log).is_ok())
     }
     assert(fs.write_private_text_atomic(path.join(out, "result.json"), json.to_string(&row).unwrap()).is_ok())
     if reason == "pass" { 0 } else { 1 }
@@ -72,6 +80,19 @@ fn main() -> i32 {
     assert(sys.metadata(path.join(dir, "report-dir/a/dunder-1/retry-1/result.json")).is_file)
     again := run(app, dir, args.clone())
     assert(again.succeeded() && again.stderr.len == 0)
+    for peer in ["pi", "goose"] {
+        file := peer + ".json"
+        results := "results-" + peer
+        assert(sys.write(path.join(dir, file), text.replace(plan, "\"name\":\"dunder\"", "\"name\":\"" + peer + "\"")).is_ok())
+        paused := run(app, dir, ["run", results.clone(), file.clone(), "1"])
+        assert(!paused.succeeded() && text.contains(paused.stderr_text(), "Provider unavailable"))
+        base := path.join(path.join(dir, results), "a/" + peer + "-1")
+        original := sys.read(path.join(base, "result.json")).unwrap()
+        assert(!text.contains(original, "provider-error"))
+        retried := run(app, dir, ["run", results.clone(), file.clone(), "1"])
+        assert(retried.succeeded() && sys.metadata(path.join(base, "retry-1/result.json")).is_file)
+        assert(sys.read(path.join(base, "result.json")).unwrap() == original)
+    }
     assert(sys.write(path.join(dir, "dogfood/cases/b/start/file"), "changed").is_ok())
     assert(!run(app, dir, args.clone()).succeeded())
     assert(sys.write(initial, text.replace(before, "fixture 1", "foreign version")).is_ok())
@@ -79,6 +100,18 @@ fn main() -> i32 {
     err := r#"{"type":"error","error":{"data":{"statusCode":429}}}"#
     assert(competitors.provider_unavailable("kilo", &output_sample(err, "", 0)))
     assert(!competitors.provider_unavailable("opencode", &output_sample(err + "\n" + r#"{"type":"step_finish"}"#, "", 0)))
+    quota := "Usage limit reached for 5 hour. Your limit will reset at 2000-01-01 10:00:00"
+    goose := r#"{"type":"error","error":"Ran into this error: Rate limit exceeded: [1308]["# + quota + "]\"}"
+    assert(competitors.provider_unavailable("goose", &output_sample(goose, "", 1)))
+    assert(!competitors.provider_unavailable("goose", &output_sample(goose, "", 0)))
+    assert(!competitors.provider_unavailable("goose", &output_sample(goose + "\n" + r#"{"type":"message"}"#, "", 1)))
+    msg := r#"{"role":"assistant","stopReason":"error","errorMessage":"# + json.quote(r#"429: {"code":"1308","message":"# + json.quote(quota) + "}") + "}"
+    terminal := r#"{"type":"agent_end","messages":["# + msg + "],\"willRetry\":false}"
+    assert(competitors.provider_unavailable("pi", &output_sample(terminal + "\n" + r#"{"type":"agent_settled"}"#, "", 0)))
+    assert(!competitors.provider_unavailable("pi", &output_sample(text.replace(terminal, "false", "true"), "", 0)))
+    assert(!competitors.provider_unavailable("pi", &output_sample(text.replace(terminal, "assistant", "toolResult"), "", 0)))
+    recovered := r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop"}]}"#
+    assert(!competitors.provider_unavailable("pi", &output_sample(terminal + "\n" + recovered, "", 0)))
     assert(competitors.dunder_failure("Session 1\nOpenCode connection failed (libcurl 28).\n") == "model-timeout")
     assert(competitors.dunder_failure("OpenCode model request timed out after 230 s.") == "model-timeout")
     assert(competitors.dunder_failure("OpenCode exceeded its 1 MiB output limit.") == "model-limit")

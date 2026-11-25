@@ -24,6 +24,10 @@ En ren klon av 0.6.0 fick uppgiften att läsa en UTF-8-uppgift från stdin. GLM-
 
 En separat lokal bedömare körde tretton förberedda prov mot programmet. Ursprungsversionen klarade två. Agentens förslag klarade tolv, inklusive giltig UTF-8 vid exakt 32 KiB, bevarade radslut, återupptagning och avvisning av en terminal som indata. Med `run - --bad` och en öppen pipe väntade programmet på indata innan det upptäckte argumentfelet. Efter att argumentkontrollen flyttats före läsningen klarade 0.7.0 alla tretton. Regressionen med en öppen pipe ingår i `tests/acceptance.ddr`.
 
+## Fel sist i en lång testlogg
+
+Det lokala acceptansprovet skapar en kontroll som skriver 1,7 MB byggutskrift och lägger felmeddelandet på stderr. Modellfixturen kan bara välja rätt reparation efter att den fått diagnosen. Provet kräver att samma kontroll passerar på den ändrade filen. Kör det med `dunder run tests/acceptance.ddr --offline --locked -- build/dunder-agent`. I en separat jämförelse med åtta loggfall klarade 0.7.0 ett och 0.8.0 alla åtta. Fallen omfattade bl.a. samtidig lång stdout och stderr, lyckade kontroller med flera MB utdata och en ogiltig UTF-8-byte intill läsbar diagnostik.
+
 ## Jämför harnessar lokalt
 
 Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Återupptagning med Cline kräver också tmux. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
@@ -67,6 +71,8 @@ Vid första GLM-försöket i den nya serien återupptog både Cline och Dunder s
 
 Första varvet på `billing-resume` är bedömt för alla sex. Pi och Goose klarade båda delarna på 167,6 respektive 276,8 sekunder. OpenCode lämnade ett godkänt filträd men nådde tidsgränsen. Kilo Code nådde också tidsgränsen och saknade godkänd slutkontroll. Alla sex återupptog sessionen utan manuellt ingripande. Detta är ett av tre försök per deltagare på en av tolv uppgifter.
 
+På CSV-uppgiften klarade Dunder Agent 0.5.0 sitt första försök på 150,4 sekunder och OpenCode nådde tidsgränsen. Sedan tog abonnemangets femtimmarskvot slut. Pi returnerade processkod 0 trots att modellens slutmeddelande innehöll HTTP 429 och leverantörskod 1308. Goose returnerade processkod 1 med samma leverantörskod i sin avslutande felhändelse. Bedömaren läser nu dessa slutmeddelanden så att kvotstopp ger nya försök för båda. Sparade kvitton och filträdens bedömningar behålls. Kilo Codes kvotstopp identifierades redan av dess adapter.
+
 ## Kör eller återuppta serien
 
 Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunder Agent enligt rotens README. Planen väljer deltagare och körbara filer. Alla deltagare körs en i taget. Varje uppgift får tre försök per deltagare och startordningen växlar.
@@ -74,6 +80,7 @@ Lägg `dunder`, `opencode`, `pi`, `goose`, `cline` och `kilo` i PATH. Bygg Dunde
 ```sh
 dunder build dogfood/compare.ddr --offline --locked -o build/compare
 dunder build dogfood/series.ddr --offline --locked -o build/series
+dunder run dogfood/series_test.ddr --offline --locked -- build/series
 build/series run build/measuring dogfood/plan.json
 build/series report build/measuring
 ```

@@ -91,6 +91,10 @@ fn receipt(folder: string, cfg: &Campaign, fixture: &Fixture, peer: &Participant
             if reason != "" { row.status = reason.clone() }
         }
     }
+    if (row.harness == "pi" || row.harness == "goose") && row.status != "timeout" && row.status != "provider-error" {
+        stdout := sys.read_text_limit(path.join(folder, "turn-" + row.turns_started.str() + ".stdout"), 67108864)
+        if stdout.ok && competitors.terminal_quota(row.harness, stdout.value, row.exit_code) { row.status = "provider-error" }
+    }
     .Ok(row)
 }
 
