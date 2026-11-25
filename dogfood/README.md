@@ -28,6 +28,8 @@ En separat lokal bedömare körde tretton förberedda prov mot programmet. Urspr
 
 Det lokala acceptansprovet skapar en kontroll som skriver 1,7 MB byggutskrift och lägger felmeddelandet på stderr. Modellfixturen kan bara välja rätt reparation efter att den fått diagnosen. Provet kräver att samma kontroll passerar på den ändrade filen. Kör det med `dunder run tests/acceptance.ddr --offline --locked -- build/dunder-agent`. I en separat jämförelse med åtta loggfall klarade 0.7.0 ett och 0.8.0 alla åtta. Fallen omfattade bl.a. samtidig lång stdout och stderr, lyckade kontroller med flera MB utdata och en ogiltig UTF-8-byte intill läsbar diagnostik.
 
+Efter kvotåterställningen den 25 november körde 0.8.0 en separat uppgift med riktig GLM-5.4 `low`. En kontroll av en PNG-exportör skrev 3,1 MB och rapporterade att enheten skulle vara `pixels/metre`. På 17 sekunder körde agenten kontrollen, ändrade en rad i `export.ddr` och fick nästa kontroll grön. En ny kompilering och kontroll i en ren katalog passerade. I 0.9.0 gick sessionens 14 händelser att läsa med `show --jsonl`. Modellen gav sitt slutsvar på kinesiska trots att uppgiften var på engelska.
+
 ## Jämför harnessar lokalt
 
 Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Återupptagning med Cline kräver också tmux. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
