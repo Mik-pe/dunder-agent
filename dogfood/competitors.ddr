@@ -40,8 +40,12 @@ fn opencode_settings(dir: string) -> string {
     file
 }
 
-pub fn command(peer: string, app: string, work: string, dir: string, prompt: string, resume_id: string) -> Result<process.Command, string> {
-    mut cmd := process.Command::new(app.clone(), [])
+pub fn command(peer: string, app: string, work: string, dir: string, prompt: string, resume_id: string, budget_ms: i64) -> Result<process.Command, string> {
+    if budget_ms <= 0 { return .Err("Trial deadline expired.") }
+    fraction := text.pad_left((budget_ms % 1000).str(), 3, "0")
+    seconds := (budget_ms / 1000).str() + "." + fraction
+    mut cmd := process.Command::new("timeout", ["-s", "TERM", "-k", "2", seconds, app.clone()])
+    cmd.set_timeout(budget_ms + 3000)
     cmd.clear_env()
     for name in ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"] {
         match process.env(name) { .Some(value) => cmd.set_env(name.clone(), move value), .None => {}, }

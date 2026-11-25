@@ -70,10 +70,9 @@ fn main() -> i32 {
     for task in [spec.prompt.clone(), spec.followup.clone()] {
         if task == "" { continue }
         prompt := task + " Run ./check after the final change. Work only in this local repository."
-        mut cmd := match competitors.command(peer, app.value, work, temp, prompt, id) {
+        cmd := match competitors.command(peer, app.value, work, temp, prompt, id, budget - elapsed) {
             .Ok(c) => c, .Err(e) => { _ := sys.eprint(e); return 2 },
         }
-        cmd.set_timeout(budget - elapsed)
         start := clock.monotonic_ms()
         output := cmd.exec()
         elapsed += clock.monotonic_ms() - start

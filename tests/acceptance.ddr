@@ -1,5 +1,6 @@
 capability network, filesystem, stdio, process
 import http
+import ..dogfood.competitors
 import std.base64 as base64
 import std.bytes as bytes
 import std.fs as fs
@@ -102,6 +103,14 @@ fn main() -> i32 {
     assert(!sys.metadata(path.join(dir, "approved.txt")).ok)
     budget := run(app, dir, ["--max-steps", "2", "run", "budget"])
     assert(!budget.succeeded() && text.contains(budget.stderr_text(), "2-decision limit"))
-    print("PASS mascot, CLI help, pipe output, edit, automatic check, resume, failed check, shell permission, decision budget")
+    scratch := path.join(dir, "scratch")
+    assert(fs.mkdir_all(scratch).ok)
+    mut timed := competitors.command("dunder", app, dir, dir, "wait", "", 1200).unwrap()
+    timed.set_env("XDG_STATE_HOME", state.clone())
+    timed.set_env("TMPDIR", scratch.clone())
+    expired := timed.exec()
+    assert(expired.code == 124 && text.contains(expired.stderr_text(), "Cancelled"))
+    assert(fs.list_dir(scratch).unwrap().len == 0)
+    print("PASS mascot, CLI help, pipe output, edit, automatic check, resume, failed check, shell permission, decision budget, deadline cancellation")
     0
 }

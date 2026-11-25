@@ -14,7 +14,7 @@ Den 25 november 2026 klarade GLM-5.4 uppgiften på 31,7 sekunder med OpenCode 2.
 
 ## Jämför harnessar lokalt
 
-Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node och Git från PATH. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
+Bygg bedömaren från repots rot. Körningen använder Dunder 0.12.1, Node, Git och timeout (BSD eller GNU) från PATH. Katalogen för resultat måste vara ny. `reference` verifierar startläget och referenslösningen lokalt utan modell.
 
 ```sh
 dunder build dogfood/compare.ddr --locked -o build/compare
@@ -35,6 +35,8 @@ Varje försök får en ny Git-arbetskatalog och 300 sekunder. Modellen ser uppgi
 Resultatkatalogen får en JSON-rad med modell, verktygsversion, startrevision, kontrollsummor, tid och utfall samt privata loggar per tur. Kör tre gånger på varje uppgift. Två godkända försök ger en löst uppgift. Rangordna efter antal lösta uppgifter och redovisa mediantid och manuella ingrepp. Fel i jämförelseverktygets konfiguration och avbrott hos modellleverantören redovisas separat och körs om.
 
 I pilotuppgiften `limit` klarade Dunder Agent, OpenCode 2.3.2, Pi 1.6.0, Goose 1.61.0 och Cline 3.0.75 samma publika och dolda tester med GLM-5.4. En tidig OpenCode-körning använde fel arbetskatalog via miljövariabeln `PWD` och ett första Cline-försök saknade fungerande leverantörsinställningar. Båda kördes om efter rättning. Alla tolv referenslösningarna passerade. Pilotresultaten ger ännu ingen rangordning.
+
+I ett separat försök med `billing-resume` klarade Dunder Agent första delens lokala kontroll. Den återupptagna sessionen redigerade rätt fil men använde en okänd strängkonvertering. Den hann inte reparera kompileringsfelet inom den gemensamma femminutersgränsen. Försöket räknas som timeout. Bedömaren ger nu agenten möjlighet att avsluta underprocesserna när tiden tar slut.
 
 Bedömaren har adapter för `dunder`, `opencode`, `pi`, `goose` och `cline`. Pi, Goose och Cline kan använda `ZAI_API_KEY` eller nyckeln i OpenCodes GLM-konfiguration. Aider saknas i leverantörens lista över tillåtna abonnemangsverktyg. En framtida jämförelse med Aider kräver separat modellåtkomst. [Z.AI:s verktygslista](https://docs.z.ai/devpack/tool/others)
 
