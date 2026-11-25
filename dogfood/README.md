@@ -10,7 +10,7 @@ dunder run dogfood/run.ddr --offline --locked -- build/dunder-agent
 
 Funktionen ska hålla ett värde inom ett slutet intervall. Startläget har två gröna tester och ett rött. Agenten får reparera funktionen och köra kontrollerna. Bedömaren kräver att ursprungstesterna är byteidentiska, att agenten faktiskt har kört en godkänd kontroll och att den reparerade funktionen klarar tre ytterligare tester i en ny katalog. De ytterligare fallen täcker ett negativt intervall, gränserna själva och ett intervall där gränserna sammanfaller.
 
-Den 25 november 2026 klarade GLM-5.4 uppgiften på 31,7 sekunder med OpenCode 2.3.2, Dunder 0.12.1 och macOS ARM64. Agenten listade katalogen, läste implementationen och testerna, redigerade funktionen och körde testerna. Bedömaren fick sex godkända tester. Tiden avser agentkörningen från start till slutsvar. Bygget och den fristående bedömningen ligger utanför mätningen.
+Den 25 november 2026 klarade GLM-5.4 uppgiften på 31,7 sekunder med OpenCode 2.3.2, Dunder 0.12.1 och macOS ARM64. Agenten listade katalogen, läste implementationen och testerna, redigerade funktionen och körde testerna. Bedömaren fick sex godkända tester. En omkörning från en ren klon tog 21,5 sekunder och klarade samma sex tester. Tiderna avser agentkörningen från start till slutsvar. Bygget och den fristående bedömningen ligger utanför mätningen.
 
 ## Fynd i Dunder 0.12.1
 
